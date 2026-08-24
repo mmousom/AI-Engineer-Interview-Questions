@@ -1,6 +1,6 @@
 # Inference, Serving & Production LLM Systems - Interview Questions
 
-50 questions: 13 basic, 20 intermediate, 17 advanced.
+51 questions: 13 basic, 20 intermediate, 18 advanced.
 
 > **On the diagrams: drawing is optional.** Some answers include a small sketch you could
 > reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
@@ -1314,5 +1314,38 @@ flowchart TD
 ```
 
 **Follow-ups:** How would you alert on prefix cache hit rate without paging on every deploy? What deploy-time check would catch a prompt-prefix change before it ships?
+
+</details>
+
+### 51. You are moving from a dense transformer to a Mamba-attention hybrid. What changes in your serving stack?
+
+<details><summary><b>Answer</b></summary>
+
+Short version: the model gets much cheaper at long context, and your cache manager gets much harder. Memory stops growing with context, and prefix caching stops being free.
+
+**Layers no longer share a cache shape.** In a dense transformer every layer stores the same KV per token, so one uniform block pool works. A hybrid mixes full-attention layers, which append per-token KV, with Mamba or linear-attention layers, which hold a fixed-size recurrent state updated in place. Engines handle this with a unified allocator over heterogeneous per-layer state: vLLM groups layers by type and forces one page size across groups, which in practice means raising the attention block size until an attention page is at least as large as a Mamba page. That produces block sizes like 528 or 672 tokens instead of 16.
+
+**Prefix caching is where it bites.** A KV block is token-addressable, so you can match, share and roll back at token granularity. A recurrent state is one vector summarising everything seen so far: you cannot slice it or trim the last 30 tokens, only snapshot it at chosen boundaries and replay forward. So reuse becomes explicit state checkpointing, with a mode choice trading pool memory against hit rate, and it is still experimental.
+
+The trap follows from the block size. Matching is block-granular, so a prompt shorter than one block has zero complete blocks and gets roughly a 0% hit rate. On a reported Qwen3.5-class hybrid, a 479-token prompt hit near 0% while a 552-token prompt hit 95.4%. Short-prompt chat traffic falls off a cliff with no obvious cause.
+
+**Memory flips.** KV no longer grows linearly with context on most layers, so your ceiling is not KV-per-token times context times batch any more. Concurrency is capped by a near-flat per-sequence state, a couple of MB on 12B-class hybrids. Redo the memory budget and the fleet-sizing arithmetic from the capacity questions rather than carrying the old formula across.
+
+**Anything that moves cache must move state.** Prefill/decode disaggregation and KV offload now transfer recurrent state as well as blocks. Also watch low-concurrency latency: the Mamba kernels are typically Triton, so CUDA graph coverage matters more than on a dense model.
+
+**Worth sketching.** It shows how one allocator constraint turns into a short-prompt cache cliff.
+
+```mermaid
+flowchart TD
+    M["Hybrid model: a few attention layers,<br/>mostly Mamba or linear layers"] --> A["Attention layer: KV blocks,<br/>token-addressable, sliceable"]
+    M --> S["Mamba layer: fixed-size state,<br/>updated in place, not sliceable"]
+    A --> U["Unified allocator, one page size<br/>across all layer groups"]
+    S --> U
+    U --> B["Attention block size raised to match<br/>mamba page, 528 to 672 tokens"]
+    B --> H["Prompt shorter than one block:<br/>no complete block, 0% cache hit"]
+    S --> C["Reuse needs explicit state checkpoints<br/>plus replay forward"]
+```
+
+**Follow-ups:** Why can you not roll a Mamba state back by 30 tokens the way you can drop KV blocks, and what does that cost an agent that edits its own history? Your hybrid deployment reports a 0% prefix cache hit rate on chat traffic but 90% on RAG traffic. What do you check first?
 
 </details>

@@ -1,6 +1,6 @@
 # Agents, Tool Use & MCP - Interview Questions
 
-55 questions: 14 basic, 23 intermediate, 18 advanced.
+60 questions: 14 basic, 24 intermediate, 22 advanced.
 
 > **On the diagrams: drawing is optional.** Some answers include a small sketch you could
 > reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
@@ -254,7 +254,7 @@ flowchart LR
 
 <details><summary><b>Answer</b></summary>
 
-Three roles: **host**, **client**, **server**. The host is the LLM application (Claude Desktop, an IDE, an agent harness). Inside the host, each connection to a server is managed by a dedicated **client** - one client per server, 1:1. The **server** is a (often small) program exposing capabilities: it might wrap a database, a SaaS API, or the local filesystem. Communication is JSON-RPC 2.0 over a transport, beginning with a capability-negotiation handshake.
+Three roles: **host**, **client**, **server**. The host is the LLM application (Claude Desktop, an IDE, an agent harness). Inside the host, each connection to a server is managed by a dedicated **client** - one client per server, 1:1. The **server** is a (often small) program exposing capabilities: it might wrap a database, a SaaS API, or the local filesystem. Communication is JSON-RPC 2.0 over a transport. Since the 2026-07-28 revision, version negotiation is per request rather than per connection: every message declares its revision through the `io.modelcontextprotocol/protocolVersion` key in `_meta` (carried as the `MCP-Protocol-Version` header on Streamable HTTP), and the server accepts or rejects each request independently, returning `UnsupportedProtocolVersionError` listing the versions it does support. A client that wants to settle the version up front can call `server/discover`, a mandatory RPC returning supported versions, capabilities and identity in one round trip, but calling it is optional. The older `initialize`/`initialized` capability-negotiation handshake is now the backward-compatibility path for revisions 2025-11-25 and earlier.
 
 **Server-side primitives** (what a server offers):
 
@@ -741,11 +741,13 @@ MCP defines two supported transports: **stdio** and **Streamable HTTP**, both ca
 
 **stdio:** the host launches the server as a local subprocess and exchanges messages over stdin/stdout. Properties: zero network surface, no auth machinery needed (the process inherits your local user's privileges and environment), trivial to develop and debug, near-zero latency overhead. It's the right choice for local, single-user integrations - filesystem access, local git, a dev database, CLI wrappers. Two implications worth stating in an interview: (1) the security model is "whatever your OS user can do, the server can do" - that's convenient and dangerous, since a malicious stdio server is arbitrary local code execution; (2) it's inherently 1:1 - one host, one server instance, no sharing across users or machines.
 
-**Streamable HTTP:** the server exposes a single HTTP endpoint; clients POST JSON-RPC messages, and the server can respond directly or upgrade to an SSE stream for progressive/multi-message responses. This replaced the original HTTP+SSE transport (which needed two endpoints and mandatory long-lived connections) in the 2025-03-26 spec revision - the redesign made servers stateless-friendly and easier to run behind ordinary load-balanced infrastructure. Choose it for anything remote or shared: SaaS-hosted MCP servers, internal services used by a whole team, multi-tenant deployments. It's where real auth lives - the spec defines OAuth-based authorization for protected servers - plus standard HTTP operational tooling (TLS, gateways, rate limiting, observability).
+**Streamable HTTP:** the server exposes a single HTTP endpoint; clients POST JSON-RPC messages, and the server can respond directly or upgrade to an SSE stream for progressive/multi-message responses. This replaced the original HTTP+SSE transport (which needed two endpoints and mandatory long-lived connections) in the 2025-03-26 spec revision, a redesign that made servers stateless-friendly and easier to run behind ordinary load-balanced infrastructure. The current revision, 2026-07-28, finishes that job at the protocol level: the `initialize`/`initialized` handshake and the `Mcp-Session-Id` header are gone, each request carries its own protocol version, identity and capabilities, so no session affinity is required and any request can land on any instance behind a plain load balancer with no shared session store. Choose it for anything remote or shared: SaaS-hosted MCP servers, internal services used by a whole team, multi-tenant deployments. It's where real auth lives - the spec defines OAuth-based authorization for protected servers - plus standard HTTP operational tooling (TLS, gateways, rate limiting, observability).
 
 Decision rule: local personal tooling → stdio; anything crossing a machine or trust boundary → Streamable HTTP. A common production pattern is developing against stdio and deploying the same server logic behind Streamable HTTP, since most SDKs abstract the transport.
 
-**Follow-ups:** Why was mandatory long-lived SSE a problem for serverless deployments? How does session state work over Streamable HTTP if the server is stateless?
+On revision skew: the spec now carries a formal feature lifecycle, so a deprecated feature stays in the specification for at least twelve months before it becomes eligible for removal, or at least ninety days under the expedited exception reserved for an active security risk. That window is what lets you carry several client revisions at once instead of cutting anyone off on release day.
+
+**Follow-ups:** Why was mandatory long-lived SSE a problem for serverless deployments? How does session state work over Streamable HTTP if the server is stateless? You maintain an MCP server with clients on three different revisions. How do you handle negotiation and deprecation?
 
 </details>
 
@@ -1081,9 +1083,33 @@ The cultural point: cost is a product metric the team owns, not a finance surpri
 
 </details>
 
+### 38. What are Agent Skills, and when do you package knowledge as a skill rather than a tool, an MCP server, or retrieval?
+
+<details><summary><b>Answer</b></summary>
+
+A skill is a folder with a SKILL.md at its root: YAML frontmatter carrying at minimum a name and a description, then Markdown instructions. It can bundle scripts, reference documents and asset templates alongside. Anthropic released the format as an open standard, and it now loads in Claude Code, ChatGPT and Codex, Cursor, VS Code, GitHub Copilot, Gemini CLI, Goose and dozens more, so a skill written once is portable.
+
+Agents load skills by progressive disclosure in three stages. At startup only each skill's name and description enter context. When a task matches a description, the agent reads the full SKILL.md. Bundled files and scripts load only when the instructions call for them. So a client can carry dozens of skills for a small fixed cost, and the description is doing retrieval work: write it as a trigger condition, not a title.
+
+The decision rule interviewers are testing:
+
+- **Tool or MCP server** when the agent lacks a capability or a connection. It cannot touch Salesforce without something that touches Salesforce.
+- **Skill** when it can already technically do the work but does not know how *you* do it. It has a shell and a Python interpreter; it does not know your release checklist, your report format, or the three gotchas in your billing export.
+- **Retrieval** when it needs facts to answer with rather than a procedure to follow.
+
+The diagnostic: could not reach the system means you need a tool. Reached it and did the wrong thing means you need a skill. Did not know a number means retrieval.
+
+Distinguish this from an AGENTS.md style project context file, which is always loaded and scoped to one repository. Skills are portable and load on demand, so a workflow that applies to 3% of tasks belongs in a skill, not in a file every request pays for.
+
+The security point is where interviewers push. A skill is executable instructions plus bundled scripts, often pulled from a registry, loaded into a context that already holds your credentials and tools. That is a supply-chain artifact shaped exactly like a dependency, and a malicious or rug-pulled SKILL.md is prompt injection with a package manager attached. Review the diff, pin a version or commit, prefer first-party or signed sources, run bundled scripts in the sandbox you would give any untrusted code, and treat "install this skill" as seriously as "add this dependency" (see the supply-chain question in the safety bank).
+
+**Follow-ups:** A skill's instructions conflict with your system prompt. Which should win, and how do you make that predictable? How would you evaluate whether a skill improves outcomes rather than just being loaded?
+
+</details>
+
 ## Advanced
 
-### 38. Walk me through the compounding-error math for agents, and what it implies for design.
+### 39. Walk me through the compounding-error math for agents, and what it implies for design.
 
 <details><summary><b>Answer</b></summary>
 
@@ -1114,7 +1140,7 @@ flowchart LR
 
 </details>
 
-### 39. How does prompt injection work against agents via tool results, and what actually mitigates it?
+### 40. How does prompt injection work against agents via tool results, and what actually mitigates it?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1145,7 +1171,7 @@ flowchart LR
 
 </details>
 
-### 40. What is the "lethal trifecta," and how do you design agent systems around it?
+### 41. What is the "lethal trifecta," and how do you design agent systems around it?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1174,7 +1200,7 @@ flowchart TD
 
 </details>
 
-### 41. How do you sandbox a code-executing agent?
+### 42. How do you sandbox a code-executing agent?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1193,7 +1219,7 @@ Layers, from inside out:
 
 </details>
 
-### 42. Why are computer-use / browser agents so much harder to make reliable than API-based agents?
+### 43. Why are computer-use / browser agents so much harder to make reliable than API-based agents?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1211,7 +1237,7 @@ Engineering responses: prefer APIs or DOM/accessibility-tree interfaces whenever
 
 </details>
 
-### 43. How do you build agents that survive long-horizon tasks - hours or days of execution?
+### 44. How do you build agents that survive long-horizon tasks - hours or days of execution?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1242,7 +1268,7 @@ flowchart LR
 
 </details>
 
-### 44. How do you engineer an agent for cost and latency without wrecking quality?
+### 45. How do you engineer an agent for cost and latency without wrecking quality?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1263,7 +1289,7 @@ Guard the quality side with your eval suite: tiering and compaction changes are 
 
 </details>
 
-### 45. What does good observability look like for an agent system?
+### 46. What does good observability look like for an agent system?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1281,7 +1307,7 @@ Full-fidelity traces at the unit of a *run*, with metrics aggregated above them 
 
 </details>
 
-### 46. Your agent gets stuck in loops or gives up too early. Diagnose and fix both.
+### 47. Your agent gets stuck in loops or gives up too early. Diagnose and fix both.
 
 <details><summary><b>Answer</b></summary>
 
@@ -1301,7 +1327,7 @@ Both directions need eval coverage: seed tasks that require persistence, and imp
 
 </details>
 
-### 47. What is tool-call hallucination, and how do you defend against it?
+### 48. What is tool-call hallucination, and how do you defend against it?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1320,7 +1346,7 @@ Defences, in layers:
 
 </details>
 
-### 48. What is context pollution in agents, and how do you deal with it?
+### 49. What is context pollution in agents, and how do you deal with it?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1342,7 +1368,7 @@ Countermeasures:
 
 </details>
 
-### 49. Should you build your agent on a framework or roll the loop yourself? Defend a position.
+### 50. Should you build your agent on a framework or roll the loop yourself? Defend a position.
 
 <details><summary><b>Answer</b></summary>
 
@@ -1358,7 +1384,7 @@ The synthesis interviewers reward: the *loop* is trivial; the *harness* (state, 
 
 </details>
 
-### 50. A customer reports the agent did something wrong three days ago. You have the trace. Can you reproduce it? How do you build a system where the answer is yes?
+### 51. A customer reports the agent did something wrong three days ago. You have the trace. Can you reproduce it? How do you build a system where the answer is yes?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1392,7 +1418,7 @@ flowchart LR
 
 </details>
 
-### 51. You're building a multi-tenant agent platform. Tenants bring their own MCP servers and their own data. What isolates them?
+### 52. You're building a multi-tenant agent platform. Tenants bring their own MCP servers and their own data. What isolates them?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1414,7 +1440,7 @@ The dangerous framing is treating this as a normal multi-tenant web app with an 
 
 </details>
 
-### 52. You want to change your agent's system prompt. How do you ship it without finding out from customers that you broke something?
+### 53. You want to change your agent's system prompt. How do you ship it without finding out from customers that you broke something?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1447,7 +1473,7 @@ flowchart LR
 
 </details>
 
-### 53. Define SLOs for a customer support agent. Every span returns 200 and latency is fine. What do you actually alert on?
+### 54. Define SLOs for a customer support agent. Every span returns 200 and latency is fine. What do you actually alert on?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1475,7 +1501,7 @@ The cultural point: alert on trends in the leading indicators, page on user-visi
 
 </details>
 
-### 54. Your agent handles multi-turn conversations where users change their minds. Static test cases can't cover that. Build me an evaluation environment.
+### 55. Your agent handles multi-turn conversations where users change their minds. Static test cases can't cover that. Build me an evaluation environment.
 
 <details><summary><b>Answer</b></summary>
 
@@ -1510,7 +1536,7 @@ flowchart LR
 
 </details>
 
-### 55. Design the memory and personalisation layer for an assistant serving millions of users. What do you store, when do you summarise versus retrieve, and how do you evaluate memory quality?
+### 56. Design the memory and personalisation layer for an assistant serving millions of users. What do you store, when do you summarise versus retrieve, and how do you evaluate memory quality?
 
 <details><summary><b>Answer</b></summary>
 
@@ -1539,5 +1565,134 @@ flowchart LR
 ```
 
 **Follow-ups:** How do you handle a user correcting a fact the system extracted wrongly? When does memory become a prompt-injection surface, and what is the mitigation?
+
+</details>
+
+### 57. MCP connects an agent to tools. What does A2A solve that MCP does not, and how do the two compose?
+
+<details><summary><b>Answer</b></summary>
+
+MCP is the vertical axis: your agent reaching down to tools, resources and data you control. A2A is the horizontal axis: your agent talking to a peer agent, usually across a team or company boundary. The giveaway is the unit of exchange. MCP exchanges a typed function call and its result. A2A exchanges a task with a lifecycle.
+
+Three things A2A has that MCP has no concept of:
+
+**Discovery and identity.** An Agent Card is a JSON document published at a well-known URI declaring the agent's identity, skills, endpoint, authentication requirements, and optional capabilities such as streaming or push notifications. It can be signed with JWS so a caller can verify it. MCP assumes you configured the server out of band; A2A assumes you have to establish who the counterparty is.
+
+**A task lifecycle instead of a return value.** Tasks move through submitted, working, completed, failed, canceled and rejected, plus two interrupted states that matter: input-required and auth-required. A peer can come back mid-task asking for clarification or credentials, which a synchronous function call cannot express. Updates arrive by polling, by streaming, or by push to your webhook, because a peer's task may run for minutes.
+
+**Opacity.** Peers collaborate on declared capabilities and exchanged messages without sharing internal thoughts, plans, tools or memory. That is the answer to "isn't this MCP with extra steps". With MCP you own the tool and its semantics. With A2A you are calling something with its own model, prompts, tools, budget and bad days, and you deliberately do not see any of it. You get a black box with a contract, not a function.
+
+They compose in both directions at once: your agent uses MCP for your systems and A2A to reach a vendor's agent, which uses its own MCP servers you never see.
+
+The part most candidates miss is that failure semantics change. A peer can reject, stall in working, or return a confident wrong artifact, so you need timeouts, idempotent retries against a system you do not control, and the peer's output treated as untrusted content.
+
+A2A reached v1.0 and is hosted by the Linux Foundation, passing 150 supporting organisations in its first year, AWS, Cisco, Google, IBM, Microsoft, Salesforce, SAP and ServiceNow among them.
+
+**Worth sketching.** Two axes on one page, with the peer's tool layer behind a wall you never see.
+
+```mermaid
+flowchart TD
+    A["Your agent"] -->|"MCP: tools, resources, data"| B["Systems you control"]
+    A -->|"A2A: a task with a lifecycle"| C["Peer agent at another company"]
+    C -->|"its own MCP, invisible to you"| D["Tools the peer owns"]
+    C -->|"working, input-required, completed"| A
+```
+
+**Follow-ups:** A peer's Agent Card advertises a skill it turns out to do badly. How would you find that out, and what do you do about it? Would you ever put A2A between two agents inside your own company, and what would justify the overhead?
+
+</details>
+
+### 58. You're exposing one of your agents to another company's agent. What crosses the boundary, and what do you refuse to expose?
+
+<details><summary><b>Answer</b></summary>
+
+What crosses is deliberately thin: an Agent Card declaring identity, skills, endpoint and authentication requirements, tasks in, typed artifacts and status events out. Nothing else.
+
+What never crosses: the system prompt, the tool manifest, tool-call arguments, raw trajectories, reasoning traces, the memory store, internal IDs that leak your schema, and anything belonging to another customer. Opacity here is a security control, not tidy design. Every internal detail you publish is reconnaissance for someone shaping your agent's behaviour.
+
+**Authentication and authorisation are separate problems.** Authentication is declared in the card and should be server-to-server: OAuth 2.0 client credentials or mutual TLS, credentials issued per peer, never a shared token. Authorisation is the harder half, because the peer authenticates as a company while acting for one of its end users. You want dual-principal identity on every task - which peer, acting for which subject, with which scopes - and per-peer capability downscoping, so peer X can invoke skill A and not skill B, only for the tenants it is entitled to.
+
+**Treat the peer's output as untrusted content.** It is the same channel as injection via tool results (Q39). A real counterparty with a real contract does not make their agent trustworthy: their agent reads web pages and tickets and can be injected. Carry the taint across the hop, never let a peer's artifact select your tools or reach a sink unreviewed, and never let a returned artifact be read as instructions.
+
+**Cost and rate control, because denial of wallet is the likely incident.** A peer that loops, or two agents that call each other, burns your inference budget quietly and legitimately. Per-peer quotas and concurrency caps, a per-task token and wall-clock budget, task depth limits so delegation cannot recurse, and a circuit breaker you can trip per peer without a deploy.
+
+**Audit that resolves across the boundary.** Log peer identity, the end-user principal, task ID, artifacts in and out, and a correlation ID both sides can quote during an incident. A shared service account destroys exactly the attribution you need when something goes wrong.
+
+The half that senior candidates raise unprompted: what you are contractually allowed to retain of their data, what your model does with it, how a peer revokes a key, and who is on the hook when the composite answer is wrong.
+
+**Follow-ups:** The peer returns an artifact that is subtly wrong and your agent acts on it. Who is accountable, and what would have caught it? How would you rate-limit a peer whose legitimate traffic is genuinely spiky?
+
+</details>
+
+### 59. Instead of exposing 130 tools as function definitions, you expose them as a code API the agent writes scripts against. Walk me through the tradeoffs.
+
+<details><summary><b>Answer</b></summary>
+
+Two wins, then the costs, which are the real content.
+
+**Definitions load on demand.** Present the tools as typed modules on a filesystem, `servers/salesforce/updateRecord.ts` and so on, and the agent lists directories and reads only the handful it needs. Schema cost then scales with what the task touches rather than with what you connected. Anthropic's write-up on this reports an example dropping from roughly 150,000 tokens to 2,000, about 98.7%.
+
+**Intermediate results stay in the sandbox.** Fetch 10,000 rows, filter to five in code, return five. With function calls all 10,000 land in context and are re-sent on every later iteration, so the saving compounds (Q17). This is usually the larger win, and it doubles as a privacy boundary: PII can be masked before anything reaches the model.
+
+**Control flow resolves in one turn.** A loop over 50 records is one script, not 50 model calls, with retries and conditionals as code rather than as trajectory. Fewer iterations means less compounding error and less latency.
+
+Now the costs:
+
+- **You need a genuine sandbox.** Resource limits, wall-clock timeouts, default-deny egress, no ambient credentials (Q41). Arbitrary code moves the enforcement boundary from a tool dispatcher you wrote to a runtime you now have to operate.
+- **Approval gates get harder.** Per-action approval was easy when the unit was a typed tool call. A script is one approval for an opaque sequence, and no operator can code-review it at speed. Keep the gate at the capability layer instead: the API functions the script calls go through a broker that enforces policy per operation, so approval and rate limiting happen where the side effect happens, not where the script is submitted.
+- **Errors arrive as stack traces.** A TypeError twelve frames deep is a far worse recovery signal than "invalid status, valid values: open, closed" (Q15), so wrap and re-shape errors deliberately.
+- **Traces become programs.** "Which tool did it call at step 12" now needs instrumentation inside the sandbox: emit a span per brokered call, not just the script text. Replay means re-running code against a world that may have moved, a weaker guarantee than replaying a rendered prompt (Q45, Q50).
+
+Where I draw the line: a code API for large tool surfaces, large results and batch work; direct function calls for a small tool set, latency-sensitive turns, and single irreversible actions I want gated individually.
+
+**Worth sketching.** Both paths side by side separate the schema saving from the result saving.
+
+```mermaid
+flowchart LR
+    A["130 tools"] -->|"function definitions, all upfront"| B["~150k tokens of schema"]
+    A -->|"typed modules on a filesystem"| C["Agent reads only what it needs"]
+    C --> D["Script runs in a sandbox"]
+    D -->|"10k rows filtered to 5"| E["Small result enters context"]
+    B --> F["Every result round-trips<br/>and is re-sent each iteration"]
+```
+
+**Follow-ups:** At how many tools, or how large a result, does the code API start paying for itself? What does a human approval prompt actually look like when the unit of action is a script?
+
+</details>
+
+### 60. Your agent solves the same class of task 500 times a week and never gets better at it. How would you make it learn, without fine-tuning?
+
+<details><summary><b>Answer</b></summary>
+
+It never improves because it has no procedural memory. Every run rediscovers the same path. What is missing is a write path from trajectories to reusable procedures, and a retrieval path that pulls them at planning time.
+
+**Distil trajectories into procedures.** After a run, a second model reads the trajectory and proposes a candidate: trigger condition, ordered steps with the actual tool calls and arguments, verification checks, known pitfalls. This is the Agent Workflow Memory idea, inducing reusable workflows from past trajectories and feeding them back in. The paper reports 24.6% and 51.1% relative success-rate improvements on Mind2Web and WebArena, with fewer steps per solved task.
+
+**Mine failures, not just successes.** ReasoningBank distils generalisable strategies from self-judged failures as well as successes, reporting up to 8.3% improvement on web tasks with fewer interaction steps. Preventative lessons ("this filter returns empty silently when the date range is inverted") are often worth more than the happy path.
+
+**Two indexes, not one.** Facts, what is true, are keyed for lookup. Procedures, how to do it, are keyed by task signature - intent plus environment plus available tools - and retrieved at plan time, not answer time. Collapsing both into one vector store is the common mistake: a procedure retrieved as a fact gets quoted instead of executed.
+
+Then the parts that make this a senior question:
+
+- **Validation before trust.** A candidate procedure is a hypothesis. Replay it against the eval set for that task class, or canary it on a traffic slice, and promote only if success rate and step count both improve. Promoting on one good run is how you learn a coincidence.
+- **Versioning and rollback.** Procedures are artifacts with versions, provenance back to the runs that produced them, and an owner. Ship them like prompt changes (Q52) and bisect the same way.
+- **Poisoning.** Self-write memory is a persistence channel for injection: content that arrived as an untrusted tool result comes back as "your own procedure" and gets trusted (memory poisoning, safety bank). Do not write procedures from runs that touched untrusted content without review, never let a learned procedure grant capability rather than order steps within capability the agent already has, and keep procedures human-readable and diffable.
+- **Consolidation.** 500 runs a week generates near-duplicates that fragment retrieval. A periodic merge, dedupe and expire pass with usage counters ages dead procedures out.
+- **Measurement.** Aggregate improvement is unattributable, because models, prompts and traffic all move. Run a holdout slice with memory disabled and compare success rate, steps and cost per successful task on the same task mix. If you cannot switch memory off, you cannot prove it helps.
+
+**Worth sketching.** The validation gate is what separates learning from an append-only pile.
+
+```mermaid
+flowchart TD
+    A["Trajectories: successes and failures"] --> B["Distil a candidate procedure"]
+    B --> C{"Beats baseline on the eval set<br/>for this task class?"}
+    C -->|"no"| D["Discard or park for review"]
+    C -->|"yes"| E["Promote, versioned and owned"]
+    E --> F["Retrieved at plan time<br/>by task signature"]
+    F --> A
+    E --> G["Merge, dedupe, expire"]
+```
+
+**Follow-ups:** How would you stop two learned procedures from contradicting each other? What would make you delete a procedure that is still being retrieved and still succeeding?
 
 </details>

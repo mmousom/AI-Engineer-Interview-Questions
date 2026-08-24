@@ -1,6 +1,6 @@
 # Safety, Security & Responsible AI - Interview Questions
 
-45 questions: 13 basic, 18 intermediate, 14 advanced.
+47 questions: 13 basic, 18 intermediate, 16 advanced.
 
 > **On the diagrams: drawing is optional.** Some answers include a small sketch you could
 > reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
@@ -1264,5 +1264,62 @@ The first thing I would say is that CV screening is an Annex III high-risk use u
 **And the part product teams do not want to hear:** measure whether the human actually overrides. If override rates are near zero, you do not have human oversight, you have automation bias with a compliance label on it. The honest recommendation may be to narrow the scope: assist with summarisation, do not rank, and never auto-reject. Pushing back on scope is part of the job here.
 
 **Follow-ups:** How would you evidence human oversight to an auditor when reviewers approve nearly everything? If counterfactual name-swapping shows a consistent delta, is redaction sufficient, or does that just hide the proxy?
+
+</details>
+
+### 46. Your agent buys things on behalf of users. Design the authorisation trail so a disputed transaction is resolvable.
+
+<details><summary><b>Answer</b></summary>
+
+A log line saying the agent charged the card is not evidence. It is a row in your own database, written by the party under dispute. What resolves a disputed transaction is a chain of signatures produced at the moment each decision happened, with keys the agent operator does not control.
+
+A dispute asks three questions, and each needs its own signed artifact.
+
+**What the user authorised.** Two shapes, and conflating them is the usual design error. Human present, the user sees the finalised cart and signs it: items, merchant, total. Human not present, the buy-the-tickets-the-moment-they-drop case, there is no cart yet, so the user signs constraints in advance: price ceiling, item specification, merchant set, validity window. Any later transaction must verify against them.
+
+**What the agent assembled.** The merchant signs the finalised checkout, so the price cannot be revised afterwards.
+
+**What was charged.** A payment authorisation bound to that specific checkout, not a free-floating card charge.
+
+The binding is what teams skip. Each artifact carries a hash of the previous one, so nothing can be substituted later and the set only verifies as a whole.
+
+AP2, the Agent Payments Protocol, standardises this. It launched in September 2025 with over 60 organisations including Mastercard, American Express, PayPal and Coinbase, reached v0.2 in April 2026, and has been contributed to the FIDO Alliance. The original Intent, Cart and Payment mandates became, in v0.2, a Checkout Mandate and a Payment Mandate, each with an Open form carrying user constraints and a Closed form bound to the finalised checkout by a checkout_hash claim, secured as SD-JWTs, with receipts referencing the mandates.
+
+Two things most candidates miss. The signing key must sit where the model cannot reach it, on a trusted surface such as the user's device, or you are back to self-attestation. And absence is evidence too: an agent that transacted with no verifying mandate has told you whose loss it is.
+
+This is the concrete form of the defence the confused-deputy and denial-of-wallet answers gesture at. An injection can steer the agent but cannot mint a user signature, and a signed price ceiling is a spend limit enforced outside the model rather than inside its prompt. Keep mandates and receipts for the full chargeback window.
+
+**Worth sketching.** Each stage signed and hash-bound to the one before, which is what makes the set hold up.
+
+```mermaid
+flowchart TD
+    A["User signs constraints or a specific cart"] --> B["Agent negotiates a checkout"]
+    B --> C["Merchant signs the finalised checkout"]
+    C --> D["Payment mandate hash-bound to it"]
+    D --> E["Receipts reference both mandates"]
+    E --> F["Dispute resolved by verifying the chain"]
+```
+
+**Follow-ups:** The user's constraint said under 200 and the agent found the item at 195 plus an 18 delivery fee. Whose reading binds, and where in your design is that decided? What changes when the counterparty is also an agent and no human is present on either side?
+
+</details>
+
+### 47. A customer asks you to prove which of these documents your model wrote. What can you actually deliver?
+
+<details><summary><b>Answer</b></summary>
+
+I can prove which documents our system produced. I cannot prove which it did not, and I can say nothing about documents another model wrote. Three mechanisms, in decreasing order of usefulness.
+
+**Server-side records of your own generations.** The one that works. Hash every completion at generation time alongside request ID, model version, account and timestamp. A customer brings a document, you normalise and hash it, and it matches or it does not. The limits are equally exact: any edit breaks the match, and it says nothing about text you did not generate. Near-duplicate hashing or embedding search over the generation log recovers edited copies, at the cost of a similarity threshold.
+
+**Watermarking.** The SynthID-Text approach biases sampling: candidate tokens compete in a tournament scored by pseudo-random values keyed on the preceding token window and a secret key, so output drifts toward high-scoring tokens. Detection averages those scores over the text and tests against chance. DeepMind published it in Nature in October 2024 and runs it across Gemini, so this is shipped, not theoretical.
+
+Why it degrades where image watermarking does not: the signal lives in choices between tokens, so it exists only where there was a choice. Short outputs give too few scored tokens to clear threshold. Low-entropy generation, a factual answer, a quoted passage, schema-constrained JSON, code, has almost no distributional slack to modulate. Translation regenerates the sequence and removes the signal, paraphrase through another model does much the same, and human editing erodes it progressively. An image watermark is spread redundantly across thousands of pixels and survives re-encoding. A text watermark has only the token stream.
+
+**Post-hoc AI-text detectors.** Not for any decision that affects a person. Liang et al. (Patterns, 2023) ran seven detectors over 91 TOEFL essays by non-native English writers: mean false-positive rate 61.3%, and 97.8% flagged by at least one detector, while native-speaker essays were classified correctly. The bias is structural: perplexity-based detectors read second-language writing as machine-like. OpenAI withdrew its own classifier in 2023 for low accuracy.
+
+So what I deliver: a definitive answer for our outputs from logged hashes, watermark detection as corroborating signal on long-form generations with the caveats written down, and no claims about third-party text. Same boundary as the image-generation answer in the multimodal bank. Provenance identifies your content, it does not detect synthetic text in the wild, which is why transparency obligations target labelling by the generator rather than downstream detection.
+
+**Follow-ups:** Your logged hash misses because the customer reformatted the document before sending it. What do you tell them, and what would you have needed to build to answer differently? If a regulator requires synthetic output to be labelled, does an invisible watermark satisfy that, or do you owe a visible disclosure as well?
 
 </details>

@@ -1,6 +1,6 @@
 # Fine-tuning, RLHF & Alignment - Interview Questions
 
-50 questions: 13 basic, 20 intermediate, 17 advanced.
+51 questions: 13 basic, 20 intermediate, 18 advanced.
 
 > **On the diagrams: drawing is optional.** Some answers include a small sketch you could
 > reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
@@ -1433,5 +1433,38 @@ flowchart LR
 ```
 
 **Follow-ups:** How would you handle a task where success is only checkable by a human? Why is trajectory-level advantage tolerable here, and at what horizon does it stop working?
+
+</details>
+
+### 51. You RL-trained an agent against a mocked environment, held-out reward improved, and the gains did not show up in production. Diagnose it.
+
+<details><summary><b>Answer</b></summary>
+
+Suspect the environment before the model. A held-out slice of the *same* mock inherits every one of its biases, so "held-out reward improved" only proves the policy generalises inside the mock. Environment-to-production divergence is the first hypothesis, and it usually shows up on three axes.
+
+**1. Schema and contract drift.** Mocks freeze at recording time. Fields get added, an enum gains a value, an endpoint starts paginating, auth scopes tighten. The agent learned to key on a response shape that no longer exists. Cheap fix: contract tests that replay live responses against the fixtures and fail when they diverge.
+
+**2. Latency and error distributions - the one most candidates miss.** A sandbox answers in milliseconds and always answers. Production emits timeouts, 429s, partial writes, stale reads and duplicate deliveries. Real agents spend most of their reliability budget on retries, idempotency and recovery, and a policy trained where nothing ever fails never learned any of that, and was never penalised for the retry storms it now causes. Sample real latency and error rates from traces and inject them, including correlated bursts rather than independent coin flips.
+
+**3. Task distribution.** You mocked what was easy to mock. Production is long-tailed: ambiguous requests, multi-intent turns, missing preconditions, users changing their mind mid-task. Resample tasks from production traces stratified by frequency, not by convenience.
+
+**The fixes are process, not algorithm.** Treat the environment as a maintained asset with an owner, a version and drift monitoring, refreshed from recorded traffic on a cadence. Hold out an environment slice the reward never touched, ideally whole task families. Then shadow-evaluate the new policy on live traffic and gate on production task-completion rate before believing any offline number.
+
+**Build vs buy.** Environments are a purchasable category now. Buying gets you a maintained sandbox and verifiers at a scale you would not fund internally. What you give up is task-distribution fit: a vendor models a generic version of the workflow, and your gains usually live in your own tail. Sensible split is buy for general capability, build for your own product surface, and never accept a vendor's verifier without probing it for hackability yourself.
+
+**Worth sketching.** it puts the environment, not the policy, at the top of the diagnosis tree.
+
+```mermaid
+flowchart TD
+    A["Env reward up,<br/>production flat"] --> B{"Mock schema matches<br/>the live API today?"}
+    B -->|"no"| C["Contract drift: refresh<br/>fixtures from live traffic"]
+    B -->|"yes"| D{"Mock emits real latency,<br/>timeouts, partial writes?"}
+    D -->|"no"| E["Agent never learned<br/>retry or recovery"]
+    D -->|"yes"| F{"Tasks sampled from traffic,<br/>or from what was easy to mock?"}
+    F -->|"easy to mock"| G["Rebuild task set from<br/>stratified production traces"]
+    F -->|"traffic"| H["Shadow-eval on live traffic<br/>before trusting the offline number"]
+```
+
+**Follow-ups:** A vendor shows you 90% success on their own environment suite - what do you ask before buying? How would you build a drift monitor that catches behaviour changes in a mocked service, not just schema changes? At what point is a live staging environment cheaper than maintaining the mock?
 
 </details>
