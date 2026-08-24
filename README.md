@@ -2,7 +2,7 @@
 
 <div align="center">
 
-  <p><strong>The complete prep resource for AI Engineer, LLM Engineer, and Applied AI interviews.</strong><br/>1,067 questions with worked answers, 8 system design case studies, 13 runnable coding challenges, company interview questions for 33 companies, and guides for 10 engineering roles.</p>
+  <p><strong>The complete prep resource for AI Engineer, LLM Engineer, and Applied AI interviews.</strong><br/>1,067 questions with worked answers, 10 system design case studies, 19 runnable coding challenges, company interview questions for 33 companies, and guides for 10 engineering roles.</p>
 
   <a href="https://github.com/ombharatiya/AI-Engineer-Interview-Questions/stargazers">
     <img src="https://img.shields.io/github/stars/ombharatiya/AI-Engineer-Interview-Questions?style=flat" alt="GitHub stars" />
@@ -78,12 +78,12 @@ If you can clear all 75, you are ready for most AI engineering loops. If you can
 |---|---|---|
 | Days | [The AI Engineer 75](AI-ENGINEER-75.md), then [CHEATSHEET.md](CHEATSHEET.md) the night before | 75 items + one evening review |
 | 1 week | The 75 + the [1-week cram plan](STUDY_PLAN.md) | 75 items + 6 crash courses |
-| 2-4 weeks | The [4-week plan](STUDY_PLAN.md): all 13 crash courses, full question banks on your weak topics, 3 design mocks | 200+ questions + 3 case studies + all 13 challenges |
-| 1-2 months+ | The [8-week plan](STUDY_PLAN.md): all 541 topic questions, all 8 case studies, all 13 challenges, plus a portfolio project | Everything, plus building |
+| 2-4 weeks | The [4-week plan](STUDY_PLAN.md): all 13 crash courses, full question banks on your weak topics, 3 design mocks | 200+ questions + 3 case studies + all 19 challenges |
+| 1-2 months+ | The [8-week plan](STUDY_PLAN.md): all 541 topic questions, all 10 case studies, all 19 challenges, plus a portfolio project | Everything, plus building |
 | Targeting a company | Add that company's interview questions from the banner above | +10-12 tailored questions and the loop map |
 | Not an "AI Engineer" title | Start from your [role guide](#role-guides) instead | Role-calibrated study map |
 
-**Essential shortcuts:** [The AI Engineer 75](AI-ENGINEER-75.md) · [Night-before cheat sheet](CHEATSHEET.md) · [Study plans](STUDY_PLAN.md) · [Curated papers and courses](resources/README.md) · [aidaddy.tech](https://aidaddy.tech), the companion site for AI system design and interview prep
+**Essential shortcuts:** [The AI Engineer 75](AI-ENGINEER-75.md) · [Glossary](GLOSSARY.md) · [Mock interview kit](13-interview-process-and-behavioral/mock-interview-kit.md) · [Night-before cheat sheet](CHEATSHEET.md) · [Study plans](STUDY_PLAN.md) · [Curated papers and courses](resources/README.md) · [aidaddy.tech](https://aidaddy.tech), the companion site for AI system design and interview prep
 
 ---
 
@@ -160,8 +160,8 @@ Each topic has a crash-course primer (`README.md`) and a full question bank with
 | 08 | [Inference, Serving & Production LLM Systems](08-inference-and-production/) | 51 | Prefill vs. decode, KV cache paging, quantization, speculative decoding, cost engineering |
 | 09 | [Safety, Security & Responsible AI](09-safety-security-and-responsible-ai/) | 47 | Prompt injection, OWASP LLM Top 10, guardrails, agent security, data governance |
 | 10 | [Multimodal Models](10-multimodal/) | 35 | Vision-language architecture, diffusion, ASR/TTS, voice agents, multimodal RAG |
-| 11 | [AI System Design](11-ai-system-design/) | 8 case studies | A reusable answer framework plus eight worked case studies |
-| 12 | [Coding Challenges](12-coding-challenges/) | 13 challenges | Implement attention, BPE, sampling, KV cache, an agent loop, and more, from scratch |
+| 11 | [AI System Design](11-ai-system-design/) | 10 case studies | A reusable answer framework plus eight worked case studies |
+| 12 | [Coding Challenges](12-coding-challenges/) | 19 challenges | Implement attention, BPE, sampling, KV cache, an agent loop, and more, from scratch |
 | 13 | [Interview Process & Behavioral](13-interview-process-and-behavioral/) | 37 | Loop anatomy by company type, take-homes, portfolio projects, AI-specific behavioural questions |
 
 ## System design case studies
@@ -178,10 +178,12 @@ Full worked examples in [11-ai-system-design/case-studies](11-ai-system-design/c
 | 6 | [Document Intelligence Pipeline](11-ai-system-design/case-studies/06-document-intelligence-pipeline.md) |
 | 7 | [Text-to-SQL Agent](11-ai-system-design/case-studies/07-text-to-sql-agent.md) |
 | 8 | [Meeting Assistant](11-ai-system-design/case-studies/08-meeting-assistant.md) |
+| 9 | [Real-time Voice Agent](11-ai-system-design/case-studies/09-realtime-voice-agent.md) |
+| 10 | [LLM Gateway and Serving Platform](11-ai-system-design/case-studies/10-llm-gateway-and-serving-platform.md) |
 
 ## Coding challenges
 
-Thirteen self-contained Python files in [12-coding-challenges](12-coding-challenges/), numpy and the standard library only, each with a reference solution and a real test suite. Read only the problem statement, implement it yourself, then run the file directly, for example `python3 12-coding-challenges/01_attention.py`.
+Nineteen self-contained Python files in [12-coding-challenges](12-coding-challenges/), numpy and the standard library only, each with a reference solution and a real test suite. Read only the problem statement, implement it yourself, then run the file directly, for example `python3 12-coding-challenges/01_attention.py`.
 
 | # | Challenge | Difficulty | Concepts |
 |---|-----------|------------|----------|
@@ -198,6 +200,12 @@ Thirteen self-contained Python files in [12-coding-challenges](12-coding-challen
 | 11 | [Rate Limiter & Retry](12-coding-challenges/11_rate_limiter_and_retry.py) | Medium | Token bucket, exponential backoff with jitter |
 | 12 | [Eval Metrics](12-coding-challenges/12_eval_metrics.py) | Medium | pass@k unbiased estimator, QA F1/EM, judge harness skeleton |
 | 13 | [Streaming Parser](12-coding-challenges/13_streaming_parser.py) | Hard | SSE parser, incremental tool-call argument assembly |
+| 14 | [LoRA Adapter](12-coding-challenges/14_lora_adapter.py) | Medium | LoRA forward, merge, batched multi-adapter serving |
+| 15 | [Beam Search](12-coding-challenges/15_beam_search.py) | Medium | Beam search with length normalisation |
+| 16 | [Semantic Cache](12-coding-challenges/16_semantic_cache.py) | Medium | Exact and semantic tiers, TTL, LRU, tag invalidation |
+| 17 | [Hybrid Search & Rerank](12-coding-challenges/17_hybrid_search_and_rerank.py) | Medium | BM25, reciprocal rank fusion, MMR |
+| 18 | [Constrained JSON Decoding](12-coding-challenges/18_constrained_json_decoding.py) | Hard | Schema-masked token decoding |
+| 19 | [Speculative Decoding](12-coding-challenges/19_speculative_decoding.py) | Hard | Draft-and-verify rejection sampling |
 
 ## Contributing
 

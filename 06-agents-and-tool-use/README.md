@@ -76,6 +76,23 @@ The highest-leverage, least-glamorous part of agent engineering:
 
 **Security:** a third-party MCP server injects untrusted text (tool descriptions, results) into your model's context and, over stdio, runs code on your machine. Tool poisoning, rug-pull description updates, and tool shadowing are real attack classes - audit, pin versions, run least-privilege.
 
+### A2A (agent-to-agent)
+
+MCP is the **vertical** axis: agent down to tools and data you control. **A2A** is the **horizontal** axis: agent across to a *peer agent*, usually over a team or company boundary. It reached **v1.0**, is hosted by the Linux Foundation, and passed 150 supporting organisations in its first year (AWS, Cisco, Google, IBM, Microsoft, Salesforce, SAP, ServiceNow). "MCP vs A2A, and how do they compose" is now a standard agent-infra screening question.
+
+- **Agent Card:** JSON metadata published at a well-known URI declaring identity, skills, endpoint, authentication requirements, and optional capabilities (streaming, push notifications). Can be signed with **JWS** so a caller can verify it.
+- **Tasks, not calls:** a task has a lifecycle - submitted, working, completed, failed, canceled, rejected, plus the interrupted states **input-required** and **auth-required**. Updates arrive by polling, streaming, or push to a webhook, because a peer's task may run for minutes.
+- **Opacity is the design property:** peers collaborate on *declared capabilities* without exposing internal prompts, tools, memory, or reasoning. You get a black box with a contract, not a function - which is exactly why it isn't "MCP with extra steps."
+- **Across an org boundary:** per-peer credentials (OAuth 2.0 client credentials, mTLS) rather than a shared token, dual-principal audit (which peer, acting for which end user), the peer's output treated as **untrusted content** like any tool result, and per-peer quotas and depth limits because denial of wallet is the likely incident.
+
+They compose: your agent uses MCP for your systems and A2A to reach a vendor's agent, which uses its own MCP servers you never see.
+
+### Agent Skills (SKILL.md)
+
+A **skill** is a folder with a `SKILL.md` (YAML frontmatter - at minimum `name` and `description` - plus Markdown instructions), optionally bundling `scripts/`, `references/`, and `assets/`. Loaded by **three-stage progressive disclosure**: name and description at startup, full instructions when a task matches, bundled files on demand. Released by Anthropic as an open standard and now loaded by Claude Code, ChatGPT/Codex, Cursor, VS Code, GitHub Copilot, Gemini CLI, Goose, Kiro, Databricks, Snowflake, JetBrains Junie, and others.
+
+**The decision rule:** tools and MCP servers give an agent a *capability or connection* it lacks; skills give it *procedural knowledge* about work it can already technically do; RAG gives it *facts*. Skills are also a **supply-chain artifact** - executable instructions plus scripts, loaded into a context holding your credentials - so review, pin, and provenance apply exactly as they do to a dependency.
+
 ### Planning patterns
 
 - **ReAct** (Yao et al., 2022): interleave Thought → Action → Observation. Adaptive but myopic. Modern tool-calling and reasoning models internalise much of it.
@@ -132,6 +149,9 @@ See [questions.md](questions.md) - **37 questions** with answers, from basic mec
 - [How we built our multi-agent research system - Anthropic](https://www.anthropic.com/engineering/built-multi-agent-research-system) - honest numbers on multi-agent token costs and orchestration lessons.
 - [Writing effective tools for agents - Anthropic](https://www.anthropic.com/engineering/writing-tools-for-agents) - tool design and evaluation guidance.
 - [Model Context Protocol - official docs & spec](https://modelcontextprotocol.io) - architecture, primitives, transports.
+- [A2A Protocol specification](https://a2a-protocol.org/latest/specification/) - Agent Cards, task lifecycle, transports, and the agent-opacity principle.
+- [Agent Skills](https://agentskills.io/) - the SKILL.md format, progressive disclosure, and the client showcase.
+- [Code execution with MCP - Anthropic](https://www.anthropic.com/engineering/code-execution-with-mcp) - presenting tools as a code API instead of upfront function definitions.
 - [ReAct: Synergizing Reasoning and Acting in Language Models - Yao et al.](https://arxiv.org/abs/2210.03629)
 - [Reflexion: Language Agents with Verbal Reinforcement Learning - Shinn et al.](https://arxiv.org/abs/2303.11366)
 - [τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains - Yao et al.](https://arxiv.org/abs/2406.12045) - source of the pass^k reliability metric.

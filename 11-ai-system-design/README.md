@@ -115,6 +115,8 @@ Full worked solutions following a consistent template (problem → clarification
 6. [Document Intelligence](case-studies/06-document-intelligence-pipeline.md) - extraction from invoices/contracts with schema validation and HITL.
 7. [Text-to-SQL Agent](case-studies/07-text-to-sql-agent.md) - NL analytics over a warehouse with correctness verification.
 8. [Meeting Assistant](case-studies/08-meeting-assistant.md) - transcription, summarisation, action items, and search over meetings.
+9. [Real-time Voice Agent](case-studies/09-realtime-voice-agent.md) - a phone agent under a sub-second voice-to-voice budget, with barge-in and turn-taking.
+10. [LLM Gateway and Serving Platform](case-studies/10-llm-gateway-and-serving-platform.md) - multi-tenant routing, quotas, failover, and the serving data plane behind them.
 
 ## Further reading
 
