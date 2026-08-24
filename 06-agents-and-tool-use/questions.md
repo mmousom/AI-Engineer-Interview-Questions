@@ -2,6 +2,12 @@
 
 55 questions: 14 basic, 23 intermediate, 18 advanced.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. What's the difference between a workflow and an agent?
@@ -15,6 +21,16 @@ The distinction is really a spectrum of agency: a single augmented LLM call → 
 Concrete contrast: "classify this support ticket, then run the matching template" is a workflow - the LLM makes one bounded decision inside code you wrote. "Investigate why this customer's export is failing and fix it" is agentic - you can't know in advance whether it takes 3 steps or 30, or which tools it needs.
 
 The senior-engineer point interviewers listen for: agency is a cost you pay, not a feature you add. A workflow with an LLM inside is easier to test (deterministic paths), easier to debug (you know where you are), and cheaper. You escalate to an agent only when the branching factor of the task defeats enumeration. Most production "agents" in 2026 are actually workflows with one or two genuinely agentic sections, and that's good engineering, not a compromise.
+
+**Worth sketching.** The ladder makes the point that agency is a dial, not a binary, and it shows exactly where control flow leaves your code.
+
+```mermaid
+flowchart LR
+    A["Single call"] -->|"code owns every path"| B["Prompt chain"]
+    B --> C["Routing<br/>one model decision"]
+    C --> D["Orchestrator + workers"]
+    D -->|"model owns control flow"| E["Open agent loop"]
+```
 
 **Follow-ups:** Where on that spectrum would you place a RAG chatbot that can optionally issue a search query? Can a system be a workflow at the top level with agents inside it?
 
@@ -37,6 +53,19 @@ Signals an agent is the wrong tool:
 Anthropic's guidance is explicit: find the simplest solution possible, and only increase complexity when simpler solutions demonstrably fall short. Agents make sense for open-ended problems where the number of steps is unpredictable and value per task is high enough to fund the tokens - coding tasks, research, operations triage.
 
 The strong answer also names the failure pattern behind the question: teams build agents for demo appeal, then spend months adding guardrails until the "agent" is a workflow anyway. Starting with the workflow skips those months.
+
+**Worth sketching.** Drawing the gate order shows you reach for an agent last, not first.
+
+```mermaid
+flowchart TD
+    A["New task"] --> B{"Can you draw<br/>the flowchart?"}
+    B -->|"yes"| C["Write it as code,<br/>LLM only for fuzzy steps"]
+    B -->|"no"| D{"Branching enumerable?"}
+    D -->|"five categories"| E["Routing workflow"]
+    D -->|"step count unknown"| F{"Task value funds tokens,<br/>gates and evals?"}
+    F -->|"no"| G["Narrow the scope,<br/>ship the workflow"]
+    F -->|"yes"| H["Agent loop"]
+```
 
 **Follow-ups:** A PM wants an "agent" for invoice processing with fixed extraction fields - what do you build? How would you retrofit an over-agentic system into a workflow?
 
@@ -70,6 +99,20 @@ Components worth naming explicitly:
 - **Stop conditions** - natural: the model responds with text and no tool calls, or calls an explicit `task_complete` tool. Forced: max iterations, token/cost budget, wall-clock timeout, repeated-identical-call detection, or a human abort. Every production loop needs the forced ones; "it stops when it's done" is a red-flag answer.
 
 Also worth mentioning: verification before accepting "done" (run the tests, check the record exists) - models declare victory prematurely, and a checkable completion criterion is the cheapest reliability win in the whole design.
+
+**Worth sketching.** Draw the forced-stop branch as prominently as the natural one, since that is the half most candidates leave out.
+
+```mermaid
+flowchart TD
+    A["Context + tool defs"] --> B["Model call"]
+    B --> C{"Tool calls emitted?"}
+    C -->|"no"| D["Verify the claim,<br/>then return"]
+    C -->|"yes"| E["Runtime executes tools"]
+    E --> F["Append results to context"]
+    F --> G{"Budget left?<br/>iterations, tokens, clock"}
+    G -->|"yes"| B
+    G -->|"no, or repeat detected"| H["Forced stop,<br/>escalate to human"]
+```
 
 **Follow-ups:** Where would you put permission checks in that loop? How would you make this loop resumable after a process crash?
 
@@ -106,6 +149,22 @@ Concretely:
 5. **Termination:** eventually the model replies with plain text and no tool calls.
 
 Common misconception to preempt: there's no hidden channel - the whole mechanism is messages in, structured messages out, and your code is the only thing with side effects.
+
+**Worth sketching.** The call ID threading through both directions is the detail that proves you have implemented this rather than read about it.
+
+```mermaid
+sequenceDiagram
+    participant R as Your runtime
+    participant M as Model
+    participant T as Tool
+    R->>M: messages + tool schemas
+    M->>R: tool_use block with id, name, args
+    R->>R: validate args, check permission
+    R->>T: execute the real function
+    T->>R: output or error
+    R->>M: tool_result carrying the same id
+    M->>R: plain text, no tool calls
+```
 
 **Follow-ups:** What happens if you return tool results in a different order than the calls? Why do providers use constrained decoding for arguments but not for choosing which tool to call?
 
@@ -144,6 +203,19 @@ The one-line version for interviews: the model proposes, the runtime disposes - 
 
 Two production caveats worth volunteering: forcing a specific tool on input that doesn't fit it invites fabricated arguments - the model must fill the schema with something; and forced tool choice can interact awkwardly with reasoning/thinking modes on some providers, so check vendor docs before combining them.
 
+**Worth sketching.** It puts a number on the win: one round trip plus the slowest tool, instead of three of each.
+
+```mermaid
+flowchart LR
+    A["One assistant turn,<br/>three tool_use blocks"] --> B["fetch calendar"]
+    A --> C["fetch weather"]
+    A --> D["fetch flight status"]
+    B --> E["Results batched,<br/>one per call id"]
+    C --> E
+    D --> E
+    E -->|"1 round trip + max(tool time)"| F["Next model call"]
+```
+
 **Follow-ups:** How would you handle one failure among five parallel calls? Why might you force `required` on the first iteration of an agent loop but `auto` afterward?
 
 </details>
@@ -161,6 +233,18 @@ Important distinction interviewers probe: MCP does not replace function calling 
 What you get from the standard: dynamic tool discovery (servers can add/change tools at runtime), a growing ecosystem of ready-made servers, portability of integrations across hosts and across model vendors, and a defined place to hang auth (OAuth-based authorization for remote servers is part of the spec).
 
 What it doesn't give you for free: tool quality (bad descriptions are still bad over MCP), security (third-party servers are a supply-chain and injection risk), or context economy (connecting many servers floods the context with tool definitions).
+
+**Worth sketching.** Two columns of boxes with one hub between them makes the N+M argument in about five seconds.
+
+```mermaid
+flowchart LR
+    A["IDE"] --> P["MCP<br/>N + M adapters,<br/>not N x M"]
+    B["Desktop app"] --> P
+    C["Your agent"] --> P
+    P --> D["GitHub server"]
+    P --> E["Postgres server"]
+    P --> F["Slack server"]
+```
 
 **Follow-ups:** If you're building a single-model internal product, does MCP buy you anything over plain function calling? How does a host handle two servers exposing identically named tools?
 
@@ -187,6 +271,17 @@ The tools/resources/prompts split is a deliberate control hierarchy - model-chos
 - **Elicitation** (added in the 2025 spec revisions) - the server asks the host to collect input from the user mid-operation.
 
 **Transports:** **stdio** - the host spawns the server as a subprocess and speaks over stdin/stdout; simplest, local-only, inherits local privileges. **Streamable HTTP** - a single HTTP endpoint with optional SSE streaming for remote/shared servers with real auth; it replaced the older HTTP+SSE two-endpoint transport in the 2025-03-26 spec revision.
+
+**Worth sketching.** The one-client-per-server line and the arrow pointing back at the host are the two things people get wrong.
+
+```mermaid
+flowchart LR
+    A["Host: the LLM app"] --> B["Client 1"]
+    A --> C["Client 2"]
+    B -->|"JSON-RPC 2.0 over stdio"| D["Server: filesystem<br/>tools, resources, prompts"]
+    C -->|"JSON-RPC 2.0 over HTTP"| E["Server: GitHub"]
+    E -->|"sampling, elicitation, roots"| A
+```
 
 **Follow-ups:** Why does sampling route through the host instead of the server calling a model API directly? When would you expose data as a resource instead of a "search" tool?
 
@@ -265,6 +360,18 @@ The practical complication worth raising unprompted: host support for resources 
 
 A related failure mode interviewers probe: resources are fetched by the host at some point and then sit in context. If the underlying data changes, the agent acts on stale content unless the server sends a resource-updated notification and the host honours it. That is usually the answer to "why does my agent keep using the old version of the file".
 
+**Worth sketching.** Drawing it as a question about who invokes, not what the code does, is the whole answer in one branch.
+
+```mermaid
+flowchart TD
+    A["Capability to expose"] --> B{"Creates, modifies<br/>or deletes anything?"}
+    B -->|"yes"| C["Tool<br/>model-controlled"]
+    B -->|"no"| D{"Who decides<br/>it is relevant?"}
+    D -->|"the model, mid-reasoning"| C
+    D -->|"the app, already knows"| E["Resource<br/>app-controlled, by URI"]
+    D -->|"the user, deliberately"| F["Prompt<br/>user-invoked template"]
+```
+
 **Follow-ups:** Your server exposes a 500 MB log file as a resource. What goes wrong, and how do you restructure it? When would you use resource templates rather than fixed URIs?
 
 </details>
@@ -284,6 +391,19 @@ What follows is **tiered orchestration**: a reasoning model plans and makes bran
 Two things candidates get wrong. First, assuming reasoning tokens are free because they are hidden. They are billed, they consume context, and on long trajectories they accumulate faster than visible output. Second, forgetting the latency tax: a reasoning model can spend real wall-clock time thinking before emitting its first tool call, and across 15 iterations that compounds into something an interactive user will not sit through.
 
 Since most providers now expose a reasoning-effort knob, the sharper framing is not "which model" but "how much thinking do I buy at this specific step". Tune it per step, not per agent. And measure it: if success rate is flat with effort turned down, you were buying nothing.
+
+**Worth sketching.** It reframes the question from "which model" to "how much thinking at this step", and shows the escalation path back up.
+
+```mermaid
+flowchart TD
+    A["Step in the loop"] --> B{"Is the decision<br/>already made?"}
+    B -->|"extract, classify, format,<br/>forced tool choice"| C["Small fast model"]
+    B -->|"plan, branch, debug,<br/>irreversible commit"| D["Reasoning model,<br/>effort tuned per step"]
+    C --> E{"Step failed?"}
+    E -->|"yes, escalate"| D
+    E -->|"no"| F["Continue"]
+    D --> F
+```
 
 **Follow-ups:** How would you measure whether the reasoning model is actually earning its cost at a given step? What happens to your prompt cache when a reasoning model's thinking blocks enter the message history?
 
@@ -313,6 +433,20 @@ The critical detail is where the key comes from. Generate a fresh UUID inside th
 There is a second, sneakier version that interviewers often push toward. The agent crashes after executing the tool but before appending the tool result to the message history. You resume from a checkpoint, the model sees an unanswered tool call, and it calls again. Same double charge, no retry logic involved. The same key defends against it, plus writing the tool result durably before you acknowledge the step as complete.
 
 The general principle: an agent is a distributed system with at-least-once delivery, and the model is an unreliable client that may repeat itself. Every tool with a side effect needs to be idempotent, natively or through a key. Reads are free to retry; writes are not. If a downstream API offers no idempotency support, wrap it yourself: record the key and result in your own store and check before calling.
+
+**Worth sketching.** The timeline makes it obvious that the second request is your retry, not the model's second call, which is the misdiagnosis the question is testing.
+
+```mermaid
+sequenceDiagram
+    participant R as Runtime
+    participant P as Payment API
+    R->>P: charge, key run_7:call_1
+    P->>P: charge succeeds server-side
+    P->>R: response lost, connection drops
+    R->>R: retry logic sees a failure
+    R->>P: retry, same key run_7:call_1
+    P->>R: replays original result, no second debit
+```
 
 **Follow-ups:** The model itself decides to call charge twice because it forgot it already did. Does an idempotency key save you? How do you handle a tool that is not idempotent and cannot be made so?
 
@@ -355,6 +489,18 @@ Costs of over-consolidation: fat tools are harder to describe unambiguously, har
 
 A 2026-relevant middle path worth naming: **code execution as the consolidation layer** - expose a sandboxed interpreter plus an API/library, and let the agent write a script that composes primitives locally, returning only the final result to context. This gets granular expressiveness without paying a loop iteration per primitive, and is increasingly how heavy tool composition is done (including over MCP).
 
+**Worth sketching.** Two paths to the same outcome, with the iteration count on the edges, is the cheapest way to show where the error surface lives.
+
+```mermaid
+flowchart LR
+    A["Book a meeting"] --> B["list_users"]
+    B --> C["get_availability"]
+    C --> D["create_event"]
+    A --> E["schedule_meeting<br/>glue lives in tested code"]
+    D -->|"3 iterations, 2 ID handoffs"| F["Booked"]
+    E -->|"1 iteration"| F
+```
+
 **Follow-ups:** How does per-call latency change the calculus? Design the tool set for an agent that manages a Postgres database - where do you consolidate?
 
 </details>
@@ -395,6 +541,18 @@ Four families of techniques, usually combined - and the goal isn't just fitting 
 4. **Architectural isolation.** Push context-hungry subtasks into subagents that return only condensed findings; the orchestrator's window stays clean. Alternatively, checkpoint-and-restart: summarise learnings, spawn a fresh context seeded with the notes - often better than limping along with a polluted window.
 
 Also mention retrieval: don't preload everything "just in case" - load references on demand via tools, keeping the working set minimal.
+
+**Worth sketching.** Splitting the compactor's output into keep and drop is what turns a vague "summarise it" answer into a design.
+
+```mermaid
+flowchart LR
+    A["Turns 1 to 40"] --> B{"Compactor"}
+    B -->|"keep"| C["Decisions, constraints,<br/>current state, open items"]
+    B -->|"drop"| D["Raw tool dumps,<br/>dead ends, stale reads"]
+    C --> E["Fresh context:<br/>summary + recent turns"]
+    A -->|"written during the run"| F["Notes file<br/>outside the window"]
+    F --> E
+```
 
 **Follow-ups:** What specifically goes into a good compaction summary for a coding agent? How do you evaluate that compaction isn't losing critical state?
 
@@ -444,6 +602,21 @@ Plan-then-execute has the model produce an explicit multi-step plan first, then 
 
 The failure mode to name for plan-then-execute: plan-worship - the agent forces the world to fit the plan instead of updating it. Explicit "replan triggers" (step failed twice, new information contradicts plan) are the fix.
 
+**Worth sketching.** The replan edge is the point of the drawing: it separates a plan you maintain from a plan you worship.
+
+```mermaid
+flowchart TD
+    A["Task"] --> B["Explicit plan, 6 steps"]
+    B --> C["Approval gate:<br/>audit intent once"]
+    C --> D["Execute, parallel<br/>where steps are independent"]
+    D --> E{"Observation<br/>invalidates the plan?"}
+    E -->|"yes, replan trigger"| B
+    E -->|"no"| F["Done"]
+    A --> G["Reactive: choose next step<br/>from the latest observation"]
+    G --> G
+    G --> F
+```
+
 **Follow-ups:** How would you represent the plan - prose in context, or a structured todo tool - and why? What's your replanning trigger design?
 
 </details>
@@ -467,6 +640,17 @@ The pattern: generate → critique (same or separate model, or a checker) → re
 
 Design detail that matters: feed the critique *and the original attempt* into the revision call, and keep failed attempts out of long-term context afterward (they pollute later reasoning).
 
+**Worth sketching.** Putting an external checker in the loop, rather than the model grading itself, is exactly the distinction being probed.
+
+```mermaid
+flowchart LR
+    A["Draft"] --> B["External check:<br/>tests, schema, rubric"]
+    B -->|"pass"| C["Accept"]
+    B -->|"fail, with the error text"| D["Revise on critique<br/>plus original attempt"]
+    D --> B
+    D -->|"round cap reached"| C
+```
+
 **Follow-ups:** Should the critic be a different model than the generator? Where would you insert reflection in a coding agent's loop - every step, or at commit boundaries?
 
 </details>
@@ -482,6 +666,17 @@ A worker researching one lead might burn 50-100k tokens on searches, page fetche
 Secondary benefits: **parallelism** (independent workers run concurrently - Anthropic's research system runs multiple search subagents at once), **specialisation** (each worker gets a purpose-built system prompt and a minimal tool set, which itself improves reliability - fewer tools, fewer wrong choices), and **fault containment** (a worker that spirals hits its own iteration budget without dragging down the run).
 
 Costs to name: **information loss at the boundary** - the worker's summary might omit the crucial detail; mitigations include structured result schemas ("findings, sources, confidence, open questions") and letting the orchestrator ask follow-ups. **Coordination overhead** - vague subtask specs cause workers to duplicate or gap; the orchestrator must scope tasks explicitly (objective, output format, boundaries). **Cost** - every worker re-reads its own system prompt and burns its own tokens; multi-agent research systems run ~15× the tokens of plain chat.
+
+**Worth sketching.** Write the token counts on the arrows: the asymmetry between what goes in and what comes back is the entire benefit.
+
+```mermaid
+flowchart LR
+    A["Orchestrator:<br/>plan and conclusions only"] -->|"task spec, ~1k tokens"| B["Worker: lead 1"]
+    A -->|"task spec, ~1k tokens"| C["Worker: lead 2"]
+    B -->|"searches, fetches, dead ends<br/>50-100k tokens stay here"| B
+    B -->|"findings, ~1k tokens"| A
+    C -->|"findings, ~1k tokens"| A
+```
 
 **Follow-ups:** What should a subagent's result schema contain for a research task? When would you give a worker write access vs keeping all writes in the orchestrator?
 
@@ -522,6 +717,17 @@ Design decisions that matter:
 - **User visibility.** Silent handoffs confuse users when tone/capability shifts; explicit ones ("transferring you to billing") set expectations.
 
 When to prefer orchestration instead: when the task decomposes into subtasks with mergeable outputs. Handoffs fit *sequential ownership transfer*; orchestration fits *parallel decomposition*.
+
+**Worth sketching.** Draw where control sits after the call: in one design it moves, in the other it returns.
+
+```mermaid
+flowchart LR
+    A["Triage agent"] -->|"transfer_to_billing,<br/>control moves"| B["Billing agent"]
+    B --> U["User"]
+    C["Orchestrator"] -->|"called like a function"| D["Billing worker"]
+    D -->|"result returns,<br/>control never left"| C
+    C --> U
+```
 
 **Follow-ups:** How do you evaluate routing quality in a handoff system? What happens to in-flight tool approvals or permissions across a handoff?
 
@@ -620,6 +826,21 @@ Guardrails fall into three groups: bounding the loop, gating the actions, and co
 
 Sequencing matters in the answer: executor-enforced controls first, prompt-based behavioural nudges second - never the reverse.
 
+**Worth sketching.** Putting every guardrail on one action's path shows they are stages in the executor, not lines in the prompt.
+
+```mermaid
+flowchart TD
+    A["Model proposes an action"] --> B{"Allowlist and<br/>schema check"}
+    B -->|"blocked"| C["Actionable error<br/>returned as a tool result"]
+    B -->|"allowed"| D{"Reversible?"}
+    D -->|"yes"| E["Execute with<br/>least-privilege credentials"]
+    D -->|"no"| F["Human approval gate"]
+    F --> E
+    E --> G{"Budget, clock or<br/>repeat detector tripped?"}
+    G -->|"no"| A
+    G -->|"yes"| H["Abort, log,<br/>report partial results"]
+```
+
 **Follow-ups:** How do you keep approval gates from destroying UX on a 50-step task? Who approves when the agent runs unattended overnight?
 
 </details>
@@ -642,6 +863,20 @@ What I would do, in order:
 4. **Split into subagents.** Give the GitHub subagent only GitHub tools. Context isolation fixes tool bloat as a side effect.
 
 The measurement that settles the argument: run your eval set with all 130 and with a curated 15. If accuracy is flat, keep them and cache them. It usually is not flat.
+
+**Worth sketching.** Splitting the two problems on the page stops the conversation collapsing into "just cache it".
+
+```mermaid
+flowchart LR
+    A["6 servers, 130 tools,<br/>45k tokens of schema"] --> B["Cost: stable prefix,<br/>prompt caching handles it"]
+    A --> C["Accuracy: near-synonym<br/>tools, wrong picks"]
+    C --> D["Curate per agent,<br/>namespace by service"]
+    C --> E["Progressive disclosure:<br/>search_tools(query)"]
+    C --> F["Split into subagents,<br/>one domain each"]
+    D --> G["Re-run evals:<br/>130 tools vs 15"]
+    E --> G
+    F --> G
+```
 
 **Follow-ups:** How would you build search_tools without adding a round trip to every task? A server sends a list-changed notification mid-session. What happens to your prompt cache?
 
@@ -688,6 +923,17 @@ The usual culprits, roughly by frequency:
 6. **Provider mechanics.** Some providers cache automatically on prefix match; others require explicit cache breakpoints and enforce a minimum cacheable length. Below the minimum, or with breakpoints in the wrong place, you get nothing.
 
 The fix that covers most of it: treat context as an append-only log, put everything volatile at the tail, and make serialization deterministic. Then verify with the cached-token counts the API returns per call rather than trusting the design.
+
+**Worth sketching.** Draw the prefix as a line and mark where each culprit writes into it: everything downstream of the mark is a miss.
+
+```mermaid
+flowchart LR
+    A["System prompt"] --> B["Tool definitions"]
+    B --> C["Messages 1 to 20"]
+    C --> D["New turn appended<br/>(the only safe write)"]
+    E["Timestamp in the system prompt"] -->|"invalidates everything after"| A
+    F["Compaction or an edited<br/>tool result at turn 3"] -->|"invalidates everything after"| C
+```
 
 **Follow-ups:** You must inject the current time because the agent reasons about deadlines. Where does it go? How would you measure cost per successful task rather than cache hit rate?
 
@@ -772,6 +1018,19 @@ For expenses:
 
 **The engineering constraint people miss:** a human approval takes minutes to hours, so you cannot hold a process open on a blocking call. The agent must checkpoint, suspend, and resume on an external event. That means durable state keyed by run ID, an idempotent resume path, and accepting a cold prompt cache on the other side. Design the pause as a first-class state, not a `input()` call with a long timeout.
 
+**Worth sketching.** The suspend-and-resume box is the part interviewers wait for: an approval is a state, not a blocking call.
+
+```mermaid
+flowchart TD
+    A["Agent proposes an action"] --> B{"Reversibility?"}
+    B -->|"read or draft"| C["Auto-approve"]
+    B -->|"submit, over threshold,<br/>pings a VP"| D["Show the diff:<br/>total, item count, flagged lines"]
+    B -->|"should never happen"| E["Not in the tool set at all"]
+    D --> F["Checkpoint and suspend,<br/>durable state keyed by run id"]
+    F -->|"approved, minutes or hours later"| G["Resume, accept a cold cache"]
+    F -->|"rejected with a reason"| H["Return as a tool result,<br/>agent adapts"]
+```
+
 **Follow-ups:** The approver is on holiday and the report is time-sensitive. What does your system do? How do you audit that an approval was meaningful rather than reflexive?
 
 </details>
@@ -839,6 +1098,18 @@ The model gives you exactly three levers, plus one that breaks the model itself:
 
 Design summary: shorten, strengthen, and above all make failures observable and recoverable.
 
+**Worth sketching.** The recovery branch is what breaks the exponent, so draw that loop rather than a row of multiplying probabilities.
+
+```mermaid
+flowchart LR
+    A["Step k"] --> B{"Result checkable?"}
+    B -->|"no signal"| C["Bad state rides forward,<br/>p declines with n"]
+    B -->|"actionable error"| D["Retry or reroute"]
+    D --> A
+    B -->|"verified"| E["Step k+1"]
+    E -->|"20 steps at p = 0.95"| F["36% end to end"]
+```
+
 **Follow-ups:** How does verification-before-done interact with this math? Given a fixed budget, when do you spend it on a better model vs recovery machinery?
 
 </details>
@@ -858,6 +1129,18 @@ What actually helps, in rough order of effectiveness:
 
 Honest summary: unsolved in the general case; engineered around via least privilege, isolation, and human gates on irreversible actions.
 
+**Worth sketching.** One token stream carrying both your instructions and the attacker's is the mechanism; the quarantine branch is the fix.
+
+```mermaid
+flowchart LR
+    A["Web page, email, ticket"] -->|"attacker text"| B["Tool result"]
+    B --> C["Same context as<br/>your system prompt"]
+    C --> D["Model follows it"]
+    D --> E{"Does this session hold<br/>an outbound tool?"}
+    E -->|"yes"| F["Exfiltration"]
+    E -->|"quarantined step,<br/>no tools"| G["Structured extract only,<br/>then hand to the privileged agent"]
+```
+
 **Follow-ups:** Design a safe "summarise my unread emails" agent - where are the trust boundaries? Why are markdown image URLs a classic exfiltration channel in chat UIs?
 
 </details>
@@ -876,6 +1159,16 @@ The framing's power is that it converts an unsolvable problem ("prevent models f
 - **Isolate:** process untrusted content in a quarantined, tool-less context and pass only structured, validated output to the privileged agent.
 
 Also name the composition trap: each MCP server or tool may be individually safe, but *connecting them* assembles the trifecta - the browsing server provides leg 2, the files server leg 1, the email server leg 3. Trifecta review must happen at the host/session level, not per-tool, and it's the single best rubric for reviewing an agent's tool manifest.
+
+**Worth sketching.** Three legs meeting at one point makes the review question concrete: which leg do I cut for this session?
+
+```mermaid
+flowchart TD
+    A["Private data access<br/>files, mail, database"] --> D["Exfiltration is reachable"]
+    B["Untrusted content<br/>web, tickets, uploads"] --> D
+    C["Outbound channel<br/>HTTP, send, image URL, push"] --> D
+    D -->|"revoke send tools once a session<br/>has touched untrusted content"| E["Combination broken,<br/>injection succeeds and gains nothing"]
+```
 
 **Follow-ups:** A coding agent has repo access, reads GitHub issues, and can push branches - walk through the trifecta. Which leg would you break for a customer-support agent, and how?
 
@@ -930,6 +1223,20 @@ Assume everything fails mid-flight - process restarts, rate limits, tool outages
 - **Context lifecycle management.** A multi-day run cannot keep one ever-growing context. The pattern is compaction plus **agent-maintained notes**: progress files, decision logs, todo lists in the workspace. On resume (or context reset), a fresh context reads the notes and continues - the notes, not the token history, are the real long-term memory. Anthropic's context-engineering guidance describes exactly this note-taking pattern for hours-long sessions.
 - **Progress accountability.** Long runs fail silently - an agent can burn a day looping politely. Emit heartbeats and progress metrics (steps completed vs plan, budget consumed), alert on stall, and support human inspection mid-run: pause, review trajectory, redirect, resume.
 - **Budget and blast-radius scaling.** Longer autonomy means bigger accumulated error potential: escalating checkpoint-review gates (human sign-off at phase boundaries) and hard spend caps per phase, not just per call.
+
+**Worth sketching.** The crash edge re-entering the loop is the point: resumability is a property of where state lives, not of uptime.
+
+```mermaid
+flowchart LR
+    A["Loop step"] --> B["Execute tool<br/>with an idempotency key"]
+    B --> C["Append result, checkpoint<br/>state keyed by run id"]
+    C --> D{"Process still alive?"}
+    D -->|"yes"| A
+    D -->|"crash, deploy, rate limit"| E["Rehydrate from checkpoint<br/>plus the notes file"]
+    E --> A
+    C --> F["Notes file:<br/>progress, decisions, todo"]
+    F --> E
+```
 
 **Follow-ups:** What exactly goes into the checkpoint - full message array or summarised state - and what are the tradeoffs on resume? How do you handle a tool version change mid-run?
 
@@ -1071,6 +1378,16 @@ So I build **two distinct replay modes**, and the distinction is the interview s
 
 **What the event log must contain** for either to work: the exact request bytes including resolved system prompt, tool definitions, and sampling params; the raw response including tool call IDs and reasoning blocks where the API returns them; every tool result verbatim; timestamps; and code and prompt versions. Append-only, keyed by run ID, treated as the source of truth from which trace UIs are derived. If you built tracing as fire-and-forget spans with payloads truncated for cost, you cannot replay, and the truncated tool result is exactly the field you will need.
 
+**Worth sketching.** Two branches off one event log, each answering a different question, is the distinction the question is built around.
+
+```mermaid
+flowchart LR
+    A["Event log: request bytes,<br/>raw responses, tool results"] --> B["Deterministic replay,<br/>no model call at all"]
+    A --> C["Counterfactual replay:<br/>live model, pinned tool results"]
+    B --> D["Answers: is the bug in my<br/>parser, gate or compactor?"]
+    C --> E["Answers: does the new prompt<br/>fix it? Run k times, read the spread"]
+```
+
 **Follow-ups:** Storing full payloads for every run is expensive at scale. What is your retention policy? How do you replay a run that involved a human approval and a 20-minute pause?
 
 </details>
@@ -1113,6 +1430,18 @@ Treat the prompt, the tool definitions, and the model version as a single versio
 4. **Rollback on the right metric.** Not error rate. Agents fail silently, every span returns 200 and the task is wrong. Watch task success rate, human intervention rate, escalation rate, and the share of runs hitting max iterations. Those move before complaints do.
 
 **The honest caveat.** Eval sets rot, and the confidence interval on a 200-task eval is wide enough that small deltas are noise. So evals gate against large regressions and canaries are the real detector. And when a provider silently updates a model under you, none of this helps unless you pin model versions and treat upgrades as deliberate, tested changes.
+
+**Worth sketching.** Drawing it as a release pipeline shows the prompt is a versioned artifact moving through gates, not a string someone edited.
+
+```mermaid
+flowchart LR
+    A["Bundle: prompt + tool defs<br/>+ model id, content hashed"] --> B["Offline eval gate:<br/>pass^k, cost per success"]
+    B --> C["Shadow on live traffic,<br/>diff decisions not strings"]
+    C --> D["Canary by tenant,<br/>1% then 10%"]
+    D --> E{"Success rate, intervention rate,<br/>share hitting max iterations"}
+    E -->|"degraded"| F["Roll back; in-flight runs<br/>finish on their pinned version"]
+    E -->|"stable"| G["Full rollout"]
+```
 
 **Follow-ups:** Your eval set says the new prompt is 3% better. Is that real? How do you build an eval set that does not rot?
 
@@ -1163,6 +1492,20 @@ Static input-output pairs cannot evaluate an interactive agent, because turn 3 d
 
 **Where this bites you, and you should say it unprompted:** the user simulator is itself an LLM with its own failure modes. It leaks information it should withhold, it is too agreeable and accepts a wrong answer, it drifts out of character. So **validate the simulator**: have humans annotate a sample of transcripts specifically for simulator errors, and do not attribute simulator failures to the agent. Skip that and you are measuring two models while reporting one number. Dual-control variants, where the simulated user also holds tools and must act, push this further and are worth knowing.
 
+**Worth sketching.** It shows the grader reading the database rather than the transcript, which is the design decision that makes the whole environment cheap to run.
+
+```mermaid
+flowchart LR
+    A["Scenario seed"] --> B["Stateful mock backend,<br/>reset per run"]
+    A --> C["User simulator:<br/>private goal, changes its mind"]
+    C -->|"turns"| D["Agent under test"]
+    D -->|"tool calls mutate state"| B
+    B --> E["Diff final state<br/>against ground truth"]
+    D --> F["Trajectory checks:<br/>policy violations, step count"]
+    E --> G["Run each scenario k times,<br/>report pass^k"]
+    F --> G
+```
+
 **Follow-ups:** Your agent overfits to the simulator's quirks and regresses in production. How do you detect that? How many scenarios do you need before the pass^k number means anything?
 
 </details>
@@ -1180,6 +1523,20 @@ This is now named directly in applied-AI job descriptions (Perplexity calls it t
 **Privacy boundaries.** Memory is user data. Per-user isolation is enforced in the retrieval layer, never left to the model. Users need visibility and deletion, which means deletion must propagate to summaries, extracted facts, and any caches, not just raw logs. Sensitive categories (health, finances) may warrant opt-in rather than silent capture.
 
 **Evaluation.** Memory quality is measurable: write a golden set of (conversation history, later query, expected recalled fact) triples and score recall precision; track contradiction rate (model asserting stale facts after correction); and A/B the whole layer against no-memory on task success and user retention, because memory that does not move product metrics is cost without benefit.
+
+**Worth sketching.** Separating the write path from the read path shows where the hard problem sits, which is extraction and expiry, not similarity search.
+
+```mermaid
+flowchart LR
+    A["Session ends"] --> B["Episodic notes:<br/>structured summary"]
+    A --> C["Semantic facts:<br/>small, with provenance"]
+    B --> D["Retrieval index"]
+    C --> D
+    C --> E["Always-on profile:<br/>top durable facts"]
+    F["User query"] --> D
+    D -->|"relevant only, not everything"| G["Working memory:<br/>the context window"]
+    E --> G
+```
 
 **Follow-ups:** How do you handle a user correcting a fact the system extracted wrongly? When does memory become a prompt-injection surface, and what is the mitigation?
 

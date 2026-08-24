@@ -2,6 +2,12 @@
 
 50 questions: 13 basic, 20 intermediate, 17 advanced.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. Walk me through what happens inside the server when an LLM processes a request. Why are prefill and decode bottlenecked differently?
@@ -18,6 +24,18 @@ This asymmetry drives essentially all serving design:
 - **Weight quantization** speeds decode (~fewer bytes to stream) more than prefill.
 - **TTFT and TPOT are different SLOs** with different levers: TTFT is about queueing + prompt length; TPOT is about bandwidth and batch contention.
 - Mixing the two phases on the same GPUs causes interference (long prefills stall everyone's decode), which is why chunked prefill and prefill/decode disaggregation exist.
+
+**Worth sketching.** It puts both bottlenecks on one picture, so the interviewer sees you know which phase is starved of compute and which of bandwidth.
+
+```mermaid
+flowchart LR
+    P["Prompt of N tokens"] --> PF["Prefill: one pass,<br/>matrix-matrix, compute-bound"]
+    PF --> KV["KV cache populated"]
+    PF --> T1["First token (TTFT)"]
+    KV --> D["Decode step: read every weight<br/>plus KV from HBM, bandwidth-bound"]
+    D -->|"one token per weight sweep"| D
+    D --> OUT["Streamed output (TPOT)"]
+```
 
 **Follow-ups:** Why doesn't adding more compute (a faster GPU with the same bandwidth) speed up batch-1 decode? At roughly what batch size does decode become compute-bound? How would you speed up TTFT specifically?
 
@@ -64,6 +82,18 @@ Total request latency ≈ `TTFT + TPOT × output_tokens`. That formula is worth 
 Reasonable chat targets (order-of-magnitude, product-dependent): P50 TTFT a few hundred ms, P99 under ~1-2 s; streaming rate comfortably above reading speed - people read at roughly 5 words/s, so ~15-30+ tokens/s per request feels fluid, and 50+ feels instant. Autocomplete-style features are different: tiny outputs, total-latency budget of a few hundred ms. Long agentic workflows care more about aggregate completion time and cost than ITL.
 
 Always report percentiles (P50/P95/P99) per metric, segmented by prompt-length bucket - averages hide exactly the failures users notice.
+
+**Worth sketching.** A latency waterfall shows which term each metric owns, which stops the conversation drifting into "latency" as one blurred number.
+
+```mermaid
+flowchart LR
+    A["Request arrives"] --> Q["Queue wait"]
+    Q --> P["Prefill, scales with prompt length"]
+    P --> F["First token: TTFT"]
+    F --> D["Decode steps"]
+    D -->|"gap between tokens = TPOT"| D
+    D --> L["Total = TTFT + TPOT x output tokens"]
+```
 
 **Follow-ups:** Your P99 TTFT doubled but P50 is flat - what are your top hypotheses? Which metric does speculative decoding improve, and which can it hurt?
 
@@ -170,6 +200,17 @@ Why it wins: decode throughput scales with batch size almost for free (one weigh
 
 The interaction to mention for extra credit: admitting a new request means running its prefill, which can stall in-flight decodes and spike everyone's ITL - the problem chunked prefill exists to solve.
 
+**Worth sketching.** Two short timelines side by side make the convoy effect obvious without any arithmetic.
+
+```mermaid
+flowchart LR
+    S1["Static: 4 requests admitted together"] --> S2["Short sequence finishes,<br/>slot idles as padding"]
+    S2 --> S3["New arrivals wait for<br/>the longest sequence to drain"]
+    C1["Continuous: schedule per iteration"] --> C2["Sequence emits EOS,<br/>leaves the batch that step"]
+    C2 --> C3["Queued request prefills<br/>and joins the decode stream"]
+    C3 --> C2
+```
+
 **Follow-ups:** What new scheduling problems does continuous batching create? How does the engine decide when to preempt a running sequence, and what happens to its KV cache?
 
 </details>
@@ -185,6 +226,17 @@ Self-hosted: vLLM does hash-based automatic prefix caching over KV blocks; SGLan
 Provider APIs monetise the same mechanism: **cached input tokens are billed at a steep discount**. Anthropic's is explicit (`cache_control` breakpoints): cache writes cost ~1.25× base input, cache reads ~0.1× - a 90% discount - with a ~5-minute refreshing TTL (longer TTL available). OpenAI's is automatic for prompts past a minimum length (~1024 tokens), with cached input discounted ~50-75% depending on model. Gemini offers explicit context caching with storage-based pricing. For an agent re-sending a 20K-token context 30 times per session, caching is the difference between paying for ~600K input tokens and ~600K mostly-discounted ones - often the single largest line-item saving available with zero quality impact.
 
 The engineering discipline it imposes: **stable prefix first, variable content last**. Any changed byte invalidates everything after it - so no timestamps/request IDs early in the system prompt, deterministic tool-definition ordering, and append-only conversation structure. Cache hit rate belongs on your cost dashboard.
+
+**Worth sketching.** Drawing the hit path makes the prefix discipline self-evident: anything volatile early moves every request onto the miss branch.
+
+```mermaid
+flowchart TD
+    R["Incoming request tokens"] --> M["Longest matching cached prefix?"]
+    M -->|"hit: system prompt, tools, history"| S["Reuse KV blocks,<br/>prefill only the new suffix"]
+    M -->|"miss: a byte changed near the front"| F["Full prefill, then store"]
+    S --> G["TTFT collapses, cached input billed at a discount"]
+    F --> G
+```
 
 **Follow-ups:** Why does inserting the current date at the top of a system prompt destroy caching? How does prefix caching interact with per-user personalisation? What's the difference between this and semantic caching?
 
@@ -244,6 +296,17 @@ So: FlashAttention makes the attention computation cheap in memory *traffic*; Pa
 
 Red flag phrasing: "we use PagedAttention instead of FlashAttention." Also worth saying: neither one changes output quality.
 
+**Worth sketching.** Two boxes stacked as layers kill the "one instead of the other" misconception in a single stroke.
+
+```mermaid
+flowchart TD
+    A["Attention for one step"] --> K["Kernel layer: FlashAttention tiles<br/>Q, K, V through SRAM"]
+    K -->|"traffic drops from O(n squared) to O(n)"| R["Exact output, no approximation"]
+    K --> B["Gathers KV through a block table"]
+    B --> M["Memory layer: PagedAttention,<br/>fixed 16-token blocks"]
+    M --> POOL["Shared pool: no fragmentation,<br/>prefix sharing by pointer"]
+```
+
 **Follow-ups:** Why does decode need a differently shaped kernel than prefill? What does changing the attention backend actually change for you operationally?
 
 </details>
@@ -261,6 +324,21 @@ There is also a correctness angle. If the generation has side effects (tool call
 The better design for anything long-running: do not tie the generation's lifetime to the browser connection at all. Generate server-side into a durable stream that the client subscribes to and can resume after a reconnect (a stream with a resume token). Then a refresh does not lose the answer, and cancellation happens because the user pressed stop, not because a socket dropped.
 
 What to measure: aborted-request rate, and tokens generated after client disconnect.
+
+**Worth sketching.** The value is in showing the whole chain, because every hop is somewhere the cancellation can silently fail to land.
+
+```mermaid
+sequenceDiagram
+    participant U as Browser
+    participant P as Proxy
+    participant S as App server
+    participant E as Engine
+    U->>P: tab closed, socket drops
+    P->>S: disconnect surfaces only on next flush
+    S->>E: abort the request
+    E->>E: free the KV slot, stop decoding
+    E->>E: chain broken means generation to max_tokens, still billed
+```
 
 **Follow-ups:** How would you implement a resumable stream? What is the cost signature in your metrics of disconnects that are never detected?
 
@@ -305,6 +383,17 @@ Limits on B: KV-cache memory (each sequence's cache must be resident - usually t
 
 This lens also explains quantization's asymmetry (weight-only quant lifts the memory-bound regime; W8A8/FP8 lifts the compute-bound one) and why speculative decoding works (trades idle compute for fewer sequential memory sweeps).
 
+**Worth sketching.** Placing the three regimes against the ridge point is what turns "batching helps" into a number you can defend.
+
+```mermaid
+flowchart LR
+    B1["Batch-1 decode:<br/>~1 FLOP per byte"] --> R["Ridge point:<br/>~300 FLOPs per byte on H100"]
+    B2["Batch-B decode:<br/>~B FLOPs per byte"] --> R
+    B3["Prefill of a 4K prompt:<br/>thousands of FLOPs per byte"] --> R
+    R -->|"below the ridge"| M["Memory-bound: perf = intensity x bandwidth"]
+    R -->|"above the ridge"| C["Compute-bound: perf capped by peak FLOPs"]
+```
+
 **Follow-ups:** Why doesn't the KV cache read amortise across the batch like weights do? Where does MoE sit on the roofline compared to a dense model at the same active-parameter count?
 
 </details>
@@ -322,6 +411,19 @@ It solves **KV-cache memory fragmentation**. Pre-vLLM systems allocated each seq
 - **Preemption is clean**: under memory pressure the scheduler evicts a sequence's blocks (recompute or swap to CPU) and restores later.
 
 The mental model to say out loud: *virtual memory and paging for the KV cache* - block table = page table, block = page, fragmentation fixed the same way OSes fixed it in the 1960s. Follow-on work (vLLM's prefix caching, SGLang's RadixAttention) builds cross-request reuse on top of this block abstraction.
+
+**Worth sketching.** Draw two block tables pointing at one shared block and the sharing story tells itself, no paper needed for the analogy.
+
+```mermaid
+flowchart LR
+    S1["Seq A: shared system prompt<br/>then its own turns"] --> T1["Block table A"]
+    S2["Seq B: same system prompt"] --> T2["Block table B"]
+    T1 --> P0["Physical block 7"]
+    T1 --> P1["Physical block 12"]
+    T2 --> P0
+    T2 --> P9["Physical block 3"]
+    P0 --> POOL["Shared pool, copy-on-write<br/>if a shared block is written"]
+```
 
 **Follow-ups:** What's the cost of paging - why not make blocks 1 token each? How does copy-on-write work for beam search or n-best sampling?
 
@@ -342,6 +444,17 @@ Two benefits:
 
 Costs: the chunked prompt's own TTFT gets somewhat worse (its prefill is spread over many iterations, and each chunk's attention must re-read the KV of all earlier chunks, adding some bandwidth overhead), and there's a tuning knob - chunk size - trading TTFT against ITL protection. Interviewers like hearing the framing: chunked prefill converts an *interference* problem into an explicit, tunable *scheduling* tradeoff. It's also a stepping stone to the fuller fix: disaggregating prefill and decode onto separate pools.
 
+**Worth sketching.** One iteration drawn as a mixed batch shows why this is a utilisation win, not just a fairness patch.
+
+```mermaid
+flowchart LR
+    A["Iteration N"] --> B["One prefill chunk of 512-2048 tokens<br/>plus every in-flight decode step"]
+    B --> C["Chunk fills the compute pipe,<br/>decode fills the bandwidth pipe"]
+    C --> D["Iteration N+1: next chunk"]
+    D --> B
+    B --> E["ITL stays flat while<br/>a 100K prompt is admitted"]
+```
+
 **Follow-ups:** How would you pick the chunk size? Why does mixing a prefill chunk into a decode batch improve hardware utilization rather than just sharing the pain?
 
 </details>
@@ -355,6 +468,18 @@ Decode is memory-bound: each token costs a full weight-sweep, while compute idle
 Faithfulness comes from the **acceptance rule** (Leviathan et al. 2022; Chen et al. 2023): accept draft token x with probability `min(1, p_target(x)/p_draft(x))`; on rejection, resample from the residual distribution `normalize(max(0, p_target − p_draft))`. This is a rejection-sampling construction whose marginal distribution is *exactly* `p_target` - provable, not approximate. So speculative decoding is purely a latency optimisation: same output distribution, including with temperature sampling. Any implementation that changes outputs (beyond floating-point noise) is buggy or is deliberately doing lossy "relaxed" acceptance.
 
 When it helps: expected tokens per target pass rise with the **acceptance rate** α (how well the drafter matches the target). Predictable text - code, structured output, formulaic prose - drafts well; high-entropy creative text doesn't. It shines at low batch sizes with compute headroom, typically ~2-3× ITL improvement. When it hurts: at high batch, the GPU is already compute-saturated, so verification passes steal throughput; a poorly matched or too-slow drafter can net negative; and the draft model consumes memory. Drafter options: a small same-tokenizer model, self-drafting heads (Medusa, EAGLE), or **n-gram/prompt-lookup** drafting - copying candidate continuations from the prompt itself, essentially free and very effective for extraction/editing workloads.
+
+**Worth sketching.** The draft-verify-accept loop with the rejection branch on it is exactly the diagram that proves you understand why output is unchanged.
+
+```mermaid
+flowchart TD
+    D["Draft model proposes k tokens"] --> V["Target scores all k<br/>in one parallel forward pass"]
+    V --> A["Accept token x with probability<br/>min(1, p_target / p_draft)"]
+    A -->|"all k accepted"| E["Emit k+1 tokens for one target sweep"]
+    A -->|"first rejection"| R["Resample from<br/>normalize(max(0, p_target - p_draft))"]
+    E --> D
+    R --> D
+```
 
 **Follow-ups:** Derive why the acceptance rule preserves the target distribution. How does batch size change the economics? When would n-gram lookup beat a trained draft model?
 
@@ -373,6 +498,19 @@ They're not interchangeable - they differ in what's quantized, how, and where th
 - **FP8 (E4M3/E5M2)**: Hopper-native W8A8; floating-point structure handles outliers more gracefully than INT8. Near-lossless in practice and the default for high-throughput production serving; also used for KV cache. FP4-family (NVFP4/MXFP4) is the Blackwell-era follow-on - worth naming as "aware of, evaluate carefully."
 
 Choosing - ask three questions. (1) **Bottleneck**: latency-sensitive/low-batch → weights-only 4-bit (AWQ/GPTQ) attacks the bandwidth bound; high-batch throughput → FP8 W8A8 attacks the compute bound. (2) **Hardware/stack**: H100-class + vLLM/TensorRT-LLM → FP8; consumer GPU → GPTQ/AWQ; CPU/Apple Silicon/edge → GGUF. (3) **Quality bar**: run *your* eval suite on the quantized artifact - perplexity deltas hide task-specific regressions (math, code, multilingual are the usual victims). Many teams land on: FP8 for the serving fleet, INT4 for the memory-constrained tier, GGUF for local/dev.
+
+**Worth sketching.** Branching on the bottleneck rather than on the format name is the whole point, and the loop back through evals is where seniority shows.
+
+```mermaid
+flowchart TD
+    Q["What binds this deployment?"] -->|"low batch, latency-sensitive"| W["Weights-only 4-bit:<br/>AWQ or GPTQ"]
+    Q -->|"high batch, throughput"| A["W8A8: FP8 on Hopper-class,<br/>INT8 otherwise"]
+    Q -->|"CPU, Apple silicon, edge"| G["GGUF k-quants via llama.cpp"]
+    W --> E["Run your own eval suite<br/>on the quantized artifact"]
+    A --> E
+    G --> E
+    E -->|"task regression, not just perplexity"| Q
+```
 
 **Follow-ups:** Why do activation outliers make W8A8 harder than W4A16? What would make you reject a 4-bit model that passes perplexity checks?
 
@@ -438,6 +576,16 @@ Both split a too-big model across GPUs; they cut along different axes with diffe
 
 Practical serving playbook: fit on one GPU if quantization allows (parallelism-free is simplest); TP within a node for bigger models; add PP only when a model exceeds a single node (e.g., frontier-scale or long-context monsters) - TP intra-node × PP inter-node. One-liner extensions worth naming: **expert parallelism** for MoE (experts sharded across GPUs, all-to-all routing) and **data parallelism** (independent replicas behind a load balancer) as the scaling mechanism once a single replica's shape is chosen.
 
+**Worth sketching.** Drawing the cut axis next to its communication cost is what justifies "TP inside a node, PP across nodes" without hand-waving.
+
+```mermaid
+flowchart LR
+    TP["Tensor parallel: every layer<br/>sharded across N GPUs"] --> TC["Two all-reduces per block,<br/>dozens of times per token"]
+    TC --> TR["Cuts per-token latency,<br/>needs NVLink, keep in one node"]
+    PP["Pipeline parallel: layers 1-20 here,<br/>21-40 there"] --> PC["One hidden-state tensor<br/>per stage boundary"]
+    PC --> PR["Same per-token latency, tolerates Ethernet,<br/>bubbles unless the pipe stays full"]
+```
+
 **Follow-ups:** Why does TP=8 across two 4-GPU nodes over Ethernet perform terribly? How does MoE change the parallelism picture?
 
 </details>
@@ -499,6 +647,18 @@ Failure modes, roughly in order of pain:
 
 Where it shines: high-repetition, low-personalisation traffic - FAQ-style support, public search-ish queries - where 20-40%+ of traffic is near-duplicates. Where to avoid it: personalised, multi-turn, or high-stakes answers. A reasonable middle path: use a semantic hit as a *candidate* that a small verifier model confirms before serving.
 
+**Worth sketching.** The threshold and the verifier are the two places this design goes wrong, so put them on the page where they can be argued about.
+
+```mermaid
+flowchart TD
+    Q["Incoming query"] --> E["Embed, nearest-neighbour search<br/>over cached query vectors"]
+    E -->|"similarity above threshold"| H["Candidate answer"]
+    E -->|"below threshold"| M["Call the model, store the pair"]
+    H --> V["Check tenant scope, prompt version,<br/>corpus version, optional verifier"]
+    V -->|"passes"| S["Serve cached answer, no inference at all"]
+    V -->|"fails"| M
+```
+
 **Follow-ups:** Design the cache key for a multi-tenant RAG product. How would you detect that your threshold is causing false hits in production?
 
 </details>
@@ -518,6 +678,19 @@ Patterns on top of that:
 - **Interleaving**: modern models mix prose and tool calls in one response; keep per-block state machines rather than assuming one content type per message.
 - **Streaming through your own API**: if your backend proxies to clients, re-emit clean, versioned events (text delta / tool started / tool result / done) rather than leaking provider formats - this is where multi-provider normalization earns its keep.
 - **Failure handling**: a stream dying mid-JSON means an unusable fragment - treat as a failed generation, retry idempotently, and make double-execution of tools impossible (idempotency keys on tool side effects).
+
+**Worth sketching.** It separates the display path from the execution path, which is the distinction that keeps a half-formed tool call from firing.
+
+```mermaid
+flowchart LR
+    S["Block start: index and tool name"] --> D["Argument deltas,<br/>concatenated by index"]
+    D --> D
+    D -->|"best-effort partial parse"| UI["Progressive UI only"]
+    D --> B["Block stop or finish event"]
+    B --> V["Parse, then validate against the schema"]
+    V -->|"valid"| X["Dispatch once,<br/>guarded by an idempotency key"]
+    V -->|"malformed"| RP["Repair or retry, never execute"]
+```
 
 **Follow-ups:** Where do you put schema validation when the model streams a 10-item JSON array you want to render progressively? How do you prevent a tool from executing twice when a stream retry replays the tool call?
 
@@ -540,6 +713,18 @@ What breaks:
 - **Evaluation.** You now own 200 quality surfaces, not one.
 
 Expect a real throughput cost versus a base-only server, growing with distinct adapters per batch. Measure it on your traffic rather than trusting a headline number.
+
+**Worth sketching.** Showing the shared base matmul beside the per-adapter term explains in one glance why 200 tenants fit where 200 replicas never would.
+
+```mermaid
+flowchart LR
+    B["One mixed batch of tokens"] --> S["Sort tokens into contiguous<br/>per-adapter segments"]
+    S --> BASE["Shared base GEMM, run once for the batch"]
+    S --> SG["Grouped GEMM (SGMV):<br/>low-rank term per adapter"]
+    BASE --> ADD["Add per token"]
+    SG --> ADD
+    ADD --> O["Continuous batching intact,<br/>ranks padded to the batch maximum"]
+```
 
 **Follow-ups:** Why can't a shared system prompt's KV be reused across two different adapters? When would you merge an adapter into the base weights and serve it as its own model instead?
 
@@ -692,6 +877,18 @@ Levers, with their effect on the same arithmetic: FP8 KV cache → 160 KB/token 
 
 Close the loop with behaviour at the limit: when admission would exceed the pool, the scheduler queues (TTFT grows) or preempts running sequences (evict-and-recompute - ITL spikes). So "KV utilization" and "preemption rate" are the dashboards that tell you this budget is exhausted before users do.
 
+**Worth sketching.** Drawing the budget as one flow from card capacity to concurrent sequences makes the KV pool visibly the thing that caps throughput.
+
+```mermaid
+flowchart TD
+    G["H100 80 GB at ~0.9 utilization"] --> W["4-bit weights: ~39 GB"]
+    G --> R["Runtime and activations: ~6 GB"]
+    G --> KV["KV pool: ~27 GB"]
+    KV -->|"~320 KB per token"| T["~84K resident tokens in total"]
+    T --> C["~21 sequences at 4K, ~10 at 8K,<br/>one request at 84K"]
+    C -->|"pool exhausted"| P["Queue, so TTFT grows,<br/>or preempt, so ITL spikes"]
+```
+
 **Follow-ups:** Redo the math with FP8 weights on 2 GPUs. Your product wants to raise the context limit from 8K to 128K - what does that do to cost per request?
 
 </details>
@@ -755,6 +952,18 @@ So the strategy is: **scale on leading indicators, shrink the cold path, and kee
 
 Mention the economic frame explicitly: autoscaling GPUs is about trading standby cost against SLO risk; the right answer differs for a chat product (warm buffers mandatory) vs batch pipeline (queue it, scale lazily).
 
+**Worth sketching.** Laying the cold path out stage by stage is how you justify a warm pool to someone who thinks autoscaling is a config value.
+
+```mermaid
+flowchart LR
+    SIG["Leading signal: queue depth,<br/>KV utilization"] --> DEC["Scale-up decision"]
+    DEC --> N["Get a GPU node: minutes,<br/>unbounded if capacity is scarce"]
+    N --> IMG["Pull the image"] --> WT["Load weights: 140 GB"] --> WARM["Engine init, CUDA graphs, cache priming"]
+    WARM --> SERVE["Serving, 5-15 minutes later"]
+    DEC --> POOL["Warm pool absorbs the spike now"]
+    POOL --> SERVE
+```
+
 **Follow-ups:** Why is GPU utilization a bad scaling signal for decode-heavy workloads? Design the scale-down path so long-running streams aren't killed.
 
 </details>
@@ -792,6 +1001,17 @@ Two practices worth naming: burn-rate alerting (alert on error-budget consumptio
 **Circuit breakers - per provider × model.** Track failure rate over a sliding window; open the breaker on sustained failure (fail fast, stop feeding a dying dependency), pass limited probes half-open, close on recovery. On open: route to the fallback chain - same-family smaller model, or another provider - *pre-validated with evals*, because prompts don't transfer 1:1 and a silent quality collapse is worse than an error page. Bulkhead traffic classes so background jobs can't exhaust connections/quota needed by interactive traffic.
 
 **Idempotency.** The LLM call itself is stateless - safe to retry, at worst you pay twice. The danger is **side effects around it**: a retried agent step re-executing a tool (double email, double write). Assign idempotency keys to side-effectful operations, dedupe at the tool layer, and make pipeline steps replay-safe (retried batch item overwrites by `custom_id`, not appends). State machines, not vibes: each request has an ID and a durable status.
+
+**Worth sketching.** The three breaker states plus the half-open probe are the part people describe vaguely, and the sketch forces the transitions to be exact.
+
+```mermaid
+flowchart LR
+    C["Closed: calls pass through"] -->|"failure rate over the window"| O["Open: fail fast,<br/>stop feeding a dying dependency"]
+    O -->|"cool-down elapsed"| H["Half-open: a few probes only"]
+    H -->|"probes succeed"| C
+    H -->|"probe fails"| O
+    O --> F["Fallback chain, eval-gated per feature,<br/>not merely API-compatible"]
+```
 
 **Follow-ups:** A stream dies at token 400 of a 600-token answer the user is reading - walk through exactly what happens. Why must fallback models be eval-gated rather than just API-compatible?
 
@@ -835,6 +1055,18 @@ Costs, in three buckets:
 - **Quality tax - the subtle one**: forcing format can force *premature commitment*. If the schema demands `{"answer": ...}` first, the model must answer before it reasons. Mitigations: put a free-text `reasoning` field before the constrained answer fields, or run two phases (unconstrained thinking → constrained extraction). Also, over-tight enums/patterns can corner the model into confidently wrong values - leave an escape hatch (`"other"`, nullable fields).
 
 Guarantee scope: constrained decoding guarantees **syntax, not semantics** - the JSON will parse; the *values* can still be wrong. Keep application-level validation.
+
+**Worth sketching.** The per-step mask-and-advance loop is the mechanism; drawing it separates "valid by construction" from "we retry until it parses".
+
+```mermaid
+flowchart LR
+    S["JSON Schema, regex or grammar"] --> A["Compile to an automaton<br/>against the tokenizer vocabulary"]
+    A --> M["Each step: mask every token<br/>that would break the format"]
+    M --> SM["Sample from the masked logits"]
+    SM --> ADV["Advance the automaton state"]
+    ADV --> M
+    SM --> OUT["Syntax guaranteed,<br/>values still need application validation"]
+```
 
 **Follow-ups:** Why must the grammar be compiled against the tokenizer vocabulary? When would you prefer parse-and-retry over constrained decoding?
 
@@ -889,6 +1121,17 @@ Why it wins at scale:
 
 Costs and open problems: **KV transfer** is the tax - hundreds of MB to GBs per long sequence, needing fast interconnect and overlap-with-compute engineering; **orchestration complexity** (two-stage scheduling, failure handling mid-handoff, cache placement/affinity so prefix reuse still works); latency floor added by the hop; and it only pays past a scale where pool sizes can be balanced - a 4-GPU deployment should use chunked prefill and move on. Interview framing: chunked prefill = time-multiplexing one pool; disaggregation = space-partitioning into two specialised tiers. Same tension, stronger medicine, more moving parts.
 
+**Worth sketching.** Two pools with the KV handoff drawn as the edge makes the tax explicit rather than letting it hide inside the architecture.
+
+```mermaid
+flowchart LR
+    R["Request"] --> PP["Prefill pool: compute-optimised,<br/>tuned for TTFT"]
+    PP -->|"KV cache over NVLink, RDMA or IB"| DP["Decode pool: bandwidth-optimised,<br/>tuned for ITL"]
+    DP --> S["Streamed tokens"]
+    PP --> SC["Scales with prompt volume"]
+    DP --> SD["Scales with generation volume"]
+```
+
 **Follow-ups:** Estimate the KV bytes transferred for an 8K-token prompt on a 70B GQA model - is that transfer a problem on NVLink vs Ethernet? How does disaggregation interact with prefix caching?
 
 </details>
@@ -912,6 +1155,19 @@ Costs and open problems: **KV transfer** is the tax - hundreds of MB to GBs per 
 - **Cache fragmentation**: prompt caches don't transfer across providers - failover forfeits cache discounts and TTFT gains; factor that into failover cost.
 - **The lowest-common-denominator trap**: over-abstracting forfeits each provider's best features - the gateway should route and govern, not flatten.
 
+**Worth sketching.** The request path drawn end to end shows where governance is enforced and where the fallback decision actually sits.
+
+```mermaid
+flowchart LR
+    A["App request"] --> GW["Gateway: auth, quota,<br/>redaction, cost metering"]
+    GW --> RT["Router: policy, difficulty,<br/>health and cost"]
+    RT --> P1["Primary model"]
+    P1 -->|"breaker open"| P2["Fallback model,<br/>eval-gated per feature"]
+    P1 --> N["Normalize stream events and errors"]
+    P2 --> N
+    N --> A
+```
+
 **Follow-ups:** How do you run evals continuously across backends without exploding cost? Where does the gateway enforce prompt-injection and data-egress controls?
 
 </details>
@@ -934,6 +1190,19 @@ The KV cache is per-replica state, so a stateless load balancer throws away the 
 
 Pitfalls to raise unprompted: the router's view goes stale when the engine evicts blocks, so measure the *actual* hit rate reported by the engine, not the router's belief. Every rolling deploy and scale-up resets caches, so stagger them and expect a TTFT and cost spike each time. And measure hit rate on **tokens**, not requests, since that is what you pay for.
 
+**Worth sketching.** Putting the score on the page makes the cache-versus-load tension concrete, which is the thing the question is really testing.
+
+```mermaid
+flowchart TD
+    R["Request"] --> K["Key: block-aligned stable prefix<br/>plus model, quant, adapter"]
+    K --> M["Radix tree: longest match per replica"]
+    M --> S["Score = w1 x match length<br/>minus w2 x load"]
+    S -->|"best match saturated"| N["Overflow to the next best"]
+    S --> REP["Chosen replica"]
+    N --> REP
+    REP --> V["Trust the engine-reported hit rate<br/>in tokens, not the router's belief"]
+```
+
 **Follow-ups:** How does prefix-aware routing interact with autoscaling, and what does that do to your scale-up policy? What hit rate would justify a shared KV tier over simple sticky sessions?
 
 </details>
@@ -953,6 +1222,18 @@ MoE decouples memory from FLOPs: total parameters are enormous, but only a small
 **Prefill and decode want different parallelism.** Prefill is compute-bound and naturally batchy; decode is all-to-all latency bound. Wanting different EP degrees on each side is one of the strongest arguments for prefill/decode disaggregation, which is exactly the shape of published large-scale MoE deployments.
 
 **Re-derive your memory model.** MLA-style attention makes KV per token small, so KV stops being what caps batch size and expert weights plus communication become the constraint instead. Do not carry the dense model's intuitions across.
+
+**Worth sketching.** Two all-to-alls on the critical path and one hot expert at the barrier explain both the latency floor and the imbalance problem at once.
+
+```mermaid
+flowchart LR
+    T["Token batch"] --> G["Router picks top-k experts per token"]
+    G -->|"all-to-all dispatch"| E1["GPU 1: experts 0-15"]
+    G -->|"all-to-all dispatch"| E2["GPU 2: experts 16-31"]
+    E1 -->|"all-to-all combine"| C["Combine, then next layer"]
+    E2 -->|"all-to-all combine"| C
+    E1 --> HOT["A hot expert sets step time<br/>for everyone at the barrier"]
+```
 
 **Follow-ups:** Why does low traffic hurt an MoE deployment more than a dense one of similar quality? How would you detect and quantify expert imbalance in production?
 
@@ -1019,6 +1300,18 @@ Other prefill growers: a longer prompt template, RAG returning more chunks, a ch
 **Method:** diff the deploy including config and prompt templates, not just model code; break P99 down by tenant, route and prompt-length bucket, since an aggregate regression is usually one segment; replay yesterday's traffic against both configs.
 
 The tempting wrong move is adding replicas. That hides a cache regression at several times the cost.
+
+**Worth sketching.** Drawing the bisect first shows you debug by splitting the metric, not by guessing causes in a list.
+
+```mermaid
+flowchart TD
+    T["P99 TTFT: 600 ms to 4 s"] --> RB["Roll back, then debug"]
+    RB --> S["Split TTFT into queue wait<br/>versus prefill time"]
+    S -->|"queue grew"| Q["Scheduling: token budget, chunked prefill off,<br/>preemptions, replica count, routing rule"]
+    S -->|"prefill grew"| P["Check prefix cache hit rate, measured in tokens"]
+    P -->|"collapsed"| V["Volatile bytes at the front, lost cache affinity,<br/>adapter or quantization bump"]
+    P -->|"steady"| L["More tokens: template change, more RAG chunks,<br/>a new long-prompt tenant"]
+```
 
 **Follow-ups:** How would you alert on prefix cache hit rate without paging on every deploy? What deploy-time check would catch a prompt-prefix change before it ships?
 

@@ -2,6 +2,12 @@
 
 37 questions: 10 basic, 14 intermediate, 13 advanced. Answers here are guidance - what the interviewer is probing, how to structure a strong answer (STAR-ish: Situation → Task → Action → Result, with numbers), a brief example sketch, and the pitfalls that sink candidates.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. Walk me through an LLM feature you shipped end to end.
@@ -189,6 +195,21 @@ Two rules I hold myself to. Don't ask what a careful read of the JD and the engi
 
 **Pitfalls:** "we eyeballed outputs and they looked good"; quoting only public benchmarks (MMLU says nothing about your feature); an LLM judge with no human calibration story; an eval that existed but never gated anything - a dashboard, not a discipline; not knowing the eval's cost or run cadence.
 
+**Worth sketching.** It shows where human labels enter and where production failures re-enter, which is the half most candidates leave out.
+
+```mermaid
+flowchart LR
+    A["Real tickets<br/>plus mined thumbs-down"] --> B["Eval set, ~400 cases"]
+    B --> C["Code assertions:<br/>format, PII"]
+    B --> D["LLM judge:<br/>faithfulness"]
+    E["100 human labels"] -->|"calibrate, 92% agreement"| D
+    C --> F["CI gate on any<br/>prompt or model diff"]
+    D --> F
+    F -->|"faithfulness -6"| G["Block the ship"]
+    F -->|"passes"| H["Deploy"]
+    H -->|"thumbs-down events"| A
+```
+
 **Follow-ups:** How did you know your judge was trustworthy? What did the eval miss that production found? How big before diffs were statistically meaningful?
 
 </details>
@@ -221,6 +242,19 @@ Two rules I hold myself to. Don't ask what a careful read of the JD and the engi
 
 **Pitfalls:** ideology in either direction ("never trust vendors" / "never build"); ignoring maintenance in build costs - the build estimate that omits evals, on-call, and upgrades is off by 3x; no story where you killed your own preference; forgetting switching costs and what happens when the vendor deprecates, pivots, or gets acquired.
 
+**Worth sketching.** Drawing the branch conditions stops the answer sounding like ideology and shows the call is repeatable.
+
+```mermaid
+flowchart TD
+    A["New capability"] --> B{"Core to our<br/>differentiation?"}
+    B -->|"no"| C{"Is a vendor's whole<br/>business this problem?"}
+    C -->|"yes"| D["Buy"]
+    C -->|"no"| E["Call a model API"]
+    B -->|"yes"| F{"Data advantage<br/>a vendor cannot match?"}
+    F -->|"no"| E
+    F -->|"yes"| G["Build, and budget for evals,<br/>on-call and upgrades"]
+```
+
 **Follow-ups:** When would fine-tuning your own model beat a frontier API? Tell me about a build/buy call you got wrong.
 
 </details>
@@ -236,6 +270,20 @@ Two rules I hold myself to. Don't ask what a careful read of the JD and the engi
 **Example sketch:** "A tool-calling agent intermittently skipped a required lookup step - roughly 1 in 15 runs. Step one was making it reproducible-ish: we logged full request payloads, so I replayed the exact context 50 times and got an 8% skip rate - now it's a measurable quantity, not a ghost. Diffing skip vs. success traces showed the failures correlated with a specific tool result landing near the context's end. Hypothesis: instruction dilution with long contexts. Fix candidates were each run 100 times against the replay: moving the instruction into the tool description cut skips to under 1%. Shipped that, added the scenario to evals with a 2%-failure-rate alarm threshold."
 
 **Pitfalls:** "set temperature to 0" as the complete answer - it doesn't eliminate provider-side variance and isn't a fix, it's a diagnostic; no logging story, meaning nothing is replayable and every bug is unfalsifiable; single-run conclusions ("I changed the prompt and it worked once"); not knowing that providers update models behind stable API names.
+
+**Worth sketching.** It turns a ghost into a measured rate, which is the whole move, and the loop back to the hypothesis is where the work actually happens.
+
+```mermaid
+flowchart TD
+    A["Flaky failure,<br/>roughly 1 in 15"] --> B["Replay the logged<br/>request 50 times"]
+    B --> C{"Reproduces at<br/>a stable rate?"}
+    C -->|"no, only in production"| D["Input variance: retrieval<br/>or context assembly order"]
+    C -->|"yes, 8%"| E["Diff failing traces<br/>against passing ones"]
+    E --> F["Hypothesis"]
+    F --> G["100 replays<br/>per candidate fix"]
+    G -->|"rate unchanged"| F
+    G -->|"under 1%"| H["Ship, add eval case,<br/>alarm at 2%"]
+```
 
 **Follow-ups:** How do you write regression tests for behaviour that's correct 95% of the time? A bug appears in production but never replays locally - what's different?
 
@@ -253,6 +301,19 @@ Two rules I hold myself to. Don't ask what a careful read of the JD and the engi
 
 **Pitfalls:** no baseline numbers ("it was expensive... we made it cheaper"); optimising without a quality gate - "we switched to a cheaper model" without evals is the story of a silent regression; jumping to exotic fixes (fine-tuning, self-hosting) before free ones (caching, prompt hygiene); not knowing the input/output token cost asymmetry.
 
+**Worth sketching.** The order is the answer: it shows you measured before cutting and did the free things first.
+
+```mermaid
+flowchart TD
+    A["$0.11 per conversation"] --> B["Token accounting:<br/>70% is input tokens"]
+    B --> C["Cache the static prefix,<br/>trim prompt 3k to 1.1k"]
+    C -->|"-40%, eval flat"| D["Route 60% of queries<br/>to a 10x cheaper model"]
+    D --> E{"Eval within 1 point<br/>of baseline?"}
+    E -->|"no, complex queries -2"| F["Tighten routing threshold,<br/>trade savings back"]
+    F --> E
+    E -->|"yes"| G["$0.03 per conversation"]
+```
+
 **Follow-ups:** At what scale does self-hosting beat API pricing? What would you try next for another 50%?
 
 </details>
@@ -268,6 +329,20 @@ Two rules I hold myself to. Don't ask what a careful read of the JD and the engi
 **Example sketch:** "Someone added a well-intentioned instruction - 'be concise' - to fix verbose answers. It worked; answers got shorter. It also broke our downstream JSON parser about 4% of the time, because conciseness made the model occasionally drop optional fields, and it degraded multi-step answers where length *was* correctness. No exceptions, no alerts - we found it three days later via a support ticket spike. Rollback was instant because prompts lived in git behind a config flag; that part we'd done right. What we hadn't: the eval suite ran nightly, not on merge, and had thin coverage of structured-output cases. Afterward: evals became a required CI gate on any prompt diff, we added schema-validation assertions for every structured output, and prompt changes ship canary-first at 5% with a quality-metric comparison before full rollout. The cultural fix mattered most - prompt edits stopped being 'just copy changes' anyone could hotfix."
 
 **Pitfalls:** revealing prompts live outside version control (or worse, edited live in a dashboard) with no embarrassment about it; "we test prompts manually before shipping" as the whole safety story; not grasping *why* prompt regressions evade normal monitoring; a story with no process change at the end.
+
+**Worth sketching.** It shows exactly why ordinary monitoring never fired, which is the part interviewers want you to understand.
+
+```mermaid
+flowchart LR
+    A["Prompt edit:<br/>be concise"] --> B["Answers get shorter"]
+    B --> C["Optional JSON fields<br/>dropped, 4% of calls"]
+    B --> D["Multi-step answers<br/>lose correctness"]
+    C --> E{"Errors, latency<br/>or alerts move?"}
+    D --> E
+    E -->|"no, all green"| F["Silent for 3 days"]
+    F --> G["Support ticket spike"]
+    G --> H["Rollback: prompts<br/>live in git"]
+```
 
 **Follow-ups:** How do you handle a prompt that must change for a model upgrade and behaves differently on both? Who's allowed to change prompts on your team, and what gates it?
 
@@ -300,6 +375,19 @@ Two rules I hold myself to. Don't ask what a careful read of the JD and the engi
 **Example sketch:** "My rule: a prototype earns production when we can state its failure rate, name its failure modes, and afford both. Our contract-analysis demo wowed leadership on ten cherry-picked documents; pressure was immediate. I built a 200-document eval from a real workload sample - accuracy was 71%, versus the ~95% the workflow needed. Instead of shipping and hoping, we shipped *shaped*: high-confidence extractions flowed straight through, low-confidence routed to human review - production-ready at 71% because the architecture absorbed the error rate. Full automation waited two more months of iteration until evals cleared the bar. The reframe I push: 'ready for production' isn't a model-quality threshold, it's a systems property - quality times blast-radius design."
 
 **Pitfalls:** "when the demo works well" - instant disqualification; a quality bar with no number attached; no mention of monitoring or rollback (readiness is operational, not just statistical); not knowing that acceptable failure rate depends on failure *cost* - 90% is production-ready for draft suggestions and disqualifying for financial actions.
+
+**Worth sketching.** It carries the claim that readiness is a systems property, not a model score.
+
+```mermaid
+flowchart TD
+    A["200-doc eval:<br/>71% accurate"] --> B{"Workflow needs 95%.<br/>Close the gap how?"}
+    B -->|"wait for quality"| C["Ships nothing<br/>for two months"]
+    B -->|"bound the blast radius"| D{"Confidence score<br/>per extraction"}
+    D -->|"high"| E["Straight through"]
+    D -->|"low"| F["Human review queue"]
+    E --> G["Ships now: quality<br/>times blast-radius design"]
+    F --> G
+```
 
 **Follow-ups:** What's the minimum viable eval before any launch? How does the bar change between an internal tool and a customer-facing feature?
 
@@ -370,6 +458,20 @@ So I run alerting in two tiers. Tier one is ordinary plumbing and it pages a hum
 The page I'd tell you about: our extraction path started failing schema validation on a rising share of calls overnight. Nothing was down. The retry loop absorbed it, so it showed up as rising latency and cost, not errors. The first thing I did was not open the prompt. I asked what changed, across three axes: provider-side model updates, our own deploys, and input mix. It was input mix. A new customer had started sending a document layout we'd never seen. The fix was a routing rule and two new eval cases, not a prompt tweak - and if I'd started at the prompt I'd have spent the night making it worse for everyone else.
 
 The thing I want any AI on-call to have is enough logging to reproduce: a full version snapshot on every request, covering model version, prompt version, retrieval index build, and tool schema version. "It got worse" is unactionable unless you can diff what moved. Without that, you're guessing, and guessing at 2am is how prompt-tweak incidents get manufactured.
+
+**Worth sketching.** The two tiers explain why some signals wake a person and some wait until morning, and the triage fan-out shows you would not start at the prompt.
+
+```mermaid
+flowchart LR
+    A["Live traffic"] --> B["Tier 1: availability, latency,<br/>429s, spend per hour"]
+    A --> C["Tier 2: refusal rate, schema<br/>failures, zero-chunk retrieval"]
+    B -->|"breach"| D["Page a human at 2am"]
+    C -->|"breach"| E["Business-hours rota"]
+    E --> F{"What changed?"}
+    F -->|"provider-side update"| G["Pin the version,<br/>re-run evals"]
+    F -->|"our deploy"| H["Roll back"]
+    F -->|"input mix"| I["Routing rule plus<br/>two new eval cases"]
+```
 
 **Follow-ups:** Which quality proxy metric has given you the best signal-to-noise, and which one did you turn off? How would you page on a regression that only affects 2% of traffic?
 
@@ -487,6 +589,20 @@ This has quietly become a graded question. Meta now runs an AI-enabled coding ro
 
 **Pitfalls:** "I'd just say no" (business routes around you, data flows anyway, unreviewed); "the DPA covers it" without having read what it actually covers; not knowing redaction/pseudonymisation is usually cheap and barely lossy; accepting or rejecting legal risk personally instead of escalating to the accountable function.
 
+**Worth sketching.** It shows you know the option space between yes and no, and where the risk decision leaves engineering.
+
+```mermaid
+flowchart TD
+    A["Which fields actually<br/>leave our boundary?"] --> B{"Does the feature<br/>need the PII at all?"}
+    B -->|"no"| C["Scope to<br/>non-sensitive fields"]
+    B -->|"yes"| D["Redact or pseudonymise,<br/>rehydrate after the call"]
+    D --> E{"Quality loss<br/>acceptable on eval?"}
+    E -->|"yes, under 2 points"| F["Zero-retention terms<br/>plus regional endpoint"]
+    E -->|"no"| G["Self-hosted model<br/>for the sensitive slice"]
+    F --> H["Privacy signs off<br/>on residual risk"]
+    G --> H
+```
+
 **Follow-ups:** How would you build the redaction layer and how do you *eval* it (what's its recall on PII, and what does a miss cost)? Does using the provider's 'no training on API data' policy fully address this? What changes if the data is health records?
 
 </details>
@@ -518,6 +634,20 @@ This has quietly become a graded question. Meta now runs an AI-enabled coding ro
 **Example sketch:** "We got a deprecation notice mid-quarter. Day one: dependency inventory found a nasty surprise - the deprecated model wasn't just serving the product, it was the judge inside our eval pipeline, so our measuring stick was dying alongside the thing it measured. We migrated the judge first, re-calibrated it against our human-labelled set, *then* evaluated successors with it. The successor model scored higher overall but broke two things silently: it formatted lists differently (breaking a downstream parser) and refused a category of legitimate financial questions the old model answered. Both caught by evals, both fixed with prompt adjustments, one week. Canary at 10% for a week comparing quality metrics side by side, then full cutover with two weeks of overlap before the deadline. Retro output: an abstraction layer for model calls, quarterly 'migration readiness' eval runs against candidate models, and a rule that judges get versioned and calibrated like any other model dependency."
 
 **Pitfalls:** treating it as a config change ("just bump the model string") - the answer of someone who's never done it; no eval-first framing, meaning quality verification is vibes; missing the judge/eval circularity; not seizing the bake-off opportunity; no retrospective step that reduces the cost of the next one.
+
+**Worth sketching.** The judge branch is what separates people who have run a migration from people who have only read about one.
+
+```mermaid
+flowchart LR
+    A["90-day notice"] --> B["Inventory every<br/>dependency"]
+    B --> C{"Is the dying model<br/>also our eval judge?"}
+    C -->|"yes"| D["Migrate and recalibrate<br/>the judge first"]
+    C -->|"no"| E["Bake-off: successor,<br/>competitors, open weights"]
+    D --> E
+    E --> F["Fix silent drift: format,<br/>refusals, verbosity"]
+    F --> G["Canary 10% for a week,<br/>quality side by side"]
+    G --> H["Cutover with two<br/>weeks of overlap"]
+```
 
 **Follow-ups:** How do you keep prompts portable across providers without sinking to lowest-common-denominator capability? What would you do at 30 days' notice instead of 90?
 
@@ -558,6 +688,20 @@ The structure I'd use:
 **Action items weighted toward detection.** One or two fixes for the cause, then the real work: a live proxy metric, a sampled scoring job on production traffic, a shadow canary comparing old and new. Fixing the specific cause without fixing the three weeks is theatre.
 
 Blameless, but not mushy: the finding is that we shipped a system whose quality was unobservable. Someone chose that under deadline, and it was probably me.
+
+**Worth sketching.** Splitting cause from detection on the board tells the interviewer where you think the real finding is.
+
+```mermaid
+flowchart TD
+    A["Quality regressed,<br/>found 3 weeks late"] --> B["Timeline by version: model,<br/>prompt, index, tool schema"]
+    B --> C["Investigation 1:<br/>what caused it"]
+    B --> D["Investigation 2:<br/>why nobody saw it"]
+    C --> E["Fix, plus a scripted case<br/>that joins the eval set"]
+    D --> F["Offline eval stayed green:<br/>frozen set, drifted traffic"]
+    F --> G["Sampled scoring on live traffic<br/>plus a shadow canary"]
+    E --> H["Most action items<br/>land on detection"]
+    G --> H
+```
 
 **Follow-ups:** How would you sample production traffic for scoring without a labelling budget that scales with traffic? What would make you page on this rather than catch it in a weekly review?
 

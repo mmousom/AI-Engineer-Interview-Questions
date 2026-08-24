@@ -2,6 +2,12 @@
 
 50 questions: 13 basic, 20 intermediate, 17 advanced.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. When would you fine-tune a model instead of using prompting or RAG?
@@ -20,6 +26,21 @@ Fine-tuning wins when you need:
 RAG wins when the requirement is factual: proprietary documents, data that changes daily, anything needing attribution. Fine-tuning is a poor knowledge store - SFT on facts gives unreliable recall, no citations, and the knowledge goes stale the moment the world changes.
 
 The nuance interviewers listen for: these are **complements, not competitors**. A common production pattern is RAG for facts plus a fine-tuned model that is better at *using* retrieved context (grounding, citing, declining when context is insufficient). Also: if the domain *language itself* is foreign to the model (legal, genomics), you may need continued pretraining, not just SFT. And always establish a prompted baseline plus an eval set *before* fine-tuning - otherwise you can't prove the fine-tune paid for itself.
+
+**Worth sketching.** the branch conditions are the whole answer, and drawing them stops you reciting a list.
+
+```mermaid
+flowchart TD
+    A["Prompted baseline<br/>plus a real eval set"] --> B{"Gap is missing facts?"}
+    B -->|"yes"| C["RAG: fresh, private,<br/>citable knowledge"]
+    B -->|"no"| D{"Gap is form, style<br/>or a narrow skill?"}
+    D -->|"yes"| E["Fine-tune"]
+    D -->|"no"| F{"Domain language<br/>itself is foreign?"}
+    F -->|"yes"| G["Continued pretraining"]
+    F -->|"no"| H["Stay with prompting"]
+    C --> I["Common end state: RAG for facts<br/>plus a model tuned to use it"]
+    E --> I
+```
 
 **Follow-ups:** Your PM says "fine-tune it on our docs so it knows our product" - how do you respond? What eval would you build before deciding? When would you do both RAG *and* fine-tuning?
 
@@ -73,6 +94,18 @@ Why: without masking, gradient signal is dominated by whatever fills your prompt
 
 Nuances a senior candidate adds: (1) In **multi-turn** data you mask everything except assistant turns - including *earlier* assistant turns is a deliberate choice (train on all turns vs. last turn only). (2) It's not always binary: for **continued pretraining** you don't mask at all, and some recipes train on prompts with a small weight when data is scarce. (3) When **packing** multiple examples into one sequence, masking must be per-example and you must prevent cross-example attention. (4) Attention masks and loss masks are different things - prompt tokens are still *attended to*; they just don't contribute loss.
 
+**Worth sketching.** it makes the point that the attention mask and the loss mask are two different things.
+
+```mermaid
+flowchart LR
+    A["Rendered sequence"] --> B["Prompt span"]
+    A --> C["Response span + EOS"]
+    B -->|"labels set to -100"| D["Excluded from loss"]
+    C -->|"labels kept"| E["Cross-entropy"]
+    B -->|"still visible to attention"| C
+    E --> F["Gradient shapes only<br/>what the model must emit"]
+```
+
 **Follow-ups:** How would you verify masking is correct before launching a run? In a multi-turn dataset, would you train on all assistant turns or only the final one - what's the tradeoff?
 
 </details>
@@ -121,6 +154,19 @@ Default to PEFT (in practice, LoRA/QLoRA) unless you have a specific reason not 
 
 The decision inputs are: task delta from base behaviour, token budget, GPU budget, and how many variants you'll operate. A good closing line: "I'd run LoRA first as a strong cheap baseline; if it plateaus below target and data isn't the bottleneck, I'd escalate rank, then consider full FT."
 
+**Worth sketching.** it turns a preference into an escalation ladder with an exit at every rung.
+
+```mermaid
+flowchart TD
+    A["LoRA r=16 baseline"] --> B{"Hits target quality?"}
+    B -->|"yes"| C["Ship the adapter"]
+    B -->|"no"| D{"More or better data<br/>moves the metric?"}
+    D -->|"yes"| E["Fix the data, retrain"]
+    D -->|"no"| F{"Rank 64 on all<br/>linear layers closes it?"}
+    F -->|"yes"| C
+    F -->|"no"| G["Full fine-tune, or<br/>continued pretraining"]
+```
+
 **Follow-ups:** How would you detect that LoRA is underfitting versus the data being the problem? Your LoRA model matches full FT on the target task - any reason to still prefer full FT?
 
 </details>
@@ -141,6 +187,19 @@ The underlying hypothesis (from the paper) is that fine-tuning updates have low 
 
 Two properties worth stating unprompted: (1) the memory win comes from not storing gradients/optimizer states for frozen weights - the base model still occupies memory for forward/backward; (2) after training you can **merge** $W' = W + \frac{\alpha}{r}BA$ into a single matrix, giving *zero* inference overhead - unmerged adapters cost a small extra matmul.
 
+**Worth sketching.** two paths and a sum is the whole idea, and it shows why step 0 is exactly the base model.
+
+```mermaid
+flowchart LR
+    X["x"] --> W["Frozen W<br/>no grads, no Adam state"]
+    X --> A["A: r by k<br/>random init"]
+    A --> B["B: d by r<br/>zero init"]
+    B -->|"scaled by alpha/r"| S["Sum"]
+    W --> S
+    S --> H["h"]
+    B --> M["Offline merge:<br/>W + alpha/r times BA"]
+```
+
 **Follow-ups:** Why initialize B to zero rather than both matrices randomly? If doubling r doesn't improve quality, what does that tell you? What breaks if alpha is way too large relative to r?
 
 </details>
@@ -160,6 +219,20 @@ Mitigations, roughly in order of bang-for-buck:
 5. **Scope the deployment**: if the model only ever sees support tickets in production, some forgetting is acceptable - but you must *measure* it to make that call deliberately.
 
 The key interview point: forgetting is invisible unless you evaluate for it. Run a before/after regression suite covering general capabilities, safety behaviour, and formatting - not just your task metric. A fine-tune that gains 10 points on your task and silently loses instruction following is a production incident waiting to happen.
+
+**Worth sketching.** it puts the general eval inside the loop, which is exactly where teams forget to put it.
+
+```mermaid
+flowchart TD
+    A["Narrow task data only"] --> B["Weights drift toward<br/>one distribution"]
+    B --> C{"General eval run<br/>before and after?"}
+    C -->|"no"| D["Regression ships silently"]
+    C -->|"yes"| E{"Regression found?"}
+    E -->|"no"| F["Accept and ship"]
+    E -->|"yes"| G["Mix 5-25% general data,<br/>fewer epochs, lower LR"]
+    G --> H["Still failing: lower r,<br/>or KL penalty to base"]
+    H --> C
+```
 
 **Follow-ups:** How would you choose the mixing ratio of general to task data? Your task metric improves but users report the model got "dumber" - what's your diagnostic plan?
 
@@ -215,17 +288,7 @@ Fixes: fewer epochs / earlier stopping keyed on *held-out* metrics, dedup, more 
 
 <details><summary><b>Answer</b></summary>
 
-The InstructGPT recipe, three stages after pretraining:
-
-```mermaid
-flowchart LR
-    A[Pretrained base] --> B[1. SFT on demonstrations]
-    B --> C[2. Reward model<br/>trained on preference pairs]
-    B --> D[3. PPO policy optimisation]
-    C -->|reward signal| D
-    B -->|frozen reference for KL| D
-    D --> E[Aligned model]
-```
+The InstructGPT recipe, three stages after pretraining.
 
 **Stage 1 - SFT**: fine-tune the base model on high-quality demonstrations (human-written or curated) so it can follow instructions at all. This is the initialization for everything downstream; RL can't fix a policy that never samples good behaviour.
 
@@ -234,6 +297,18 @@ flowchart LR
 **Stage 3 - PPO**: the SFT model becomes the policy. Sample responses to prompts, score them with the RM, and update the policy with PPO to increase expected reward - with a **KL penalty against the frozen SFT (reference) model** so the policy can't wander into degenerate text that happens to fool the RM. The effective objective is roughly $\mathbb{E}[r(x,y)] - \beta\,\mathrm{KL}(\pi \| \pi_{ref})$.
 
 Why RL at all, instead of more SFT? Preferences encode *relative* quality on the model's own outputs - signal you can't easily express as demonstrations - and it's much cheaper for humans to rank than to write. The known failure mode is **reward hacking**: the RM is an imperfect proxy, and unconstrained optimisation exploits its blind spots (length bias, sycophancy), which is exactly what the KL term and fresh preference data are there to contain.
+
+**Worth sketching.** the SFT checkpoint feeds three arrows, and that is the thing people miss.
+
+```mermaid
+flowchart LR
+    A["Pretrained base"] --> B["Stage 1: SFT<br/>on demonstrations"]
+    B --> C["Stage 2: reward model<br/>on preference pairs"]
+    B --> D["Stage 3: PPO policy"]
+    C -->|"reward signal"| D
+    B -->|"frozen reference for KL"| D
+    D --> E["Aligned model"]
+```
 
 **Follow-ups:** Why pairwise preferences instead of absolute ratings? What breaks if you skip SFT and run PPO on the base model? Where does DPO short-circuit this pipeline?
 
@@ -275,6 +350,18 @@ Dedup the prompt and the response separately, because they fail differently. Man
 
 The part people get wrong is over-dedup. Some repetition is signal: if 30% of production traffic is the same intent, collapsing it to one example makes your training distribution stop matching reality. Prefer capping counts per cluster over dropping to a single instance. And always dedup before you split, never after, or your test set leaks.
 
+**Worth sketching.** the order is load-bearing: everything happens before the split, never after.
+
+```mermaid
+flowchart LR
+    A["Raw examples"] --> B["Normalise<br/>whitespace and unicode"]
+    B --> C["Exact hash dedup"]
+    C --> D["MinHash LSH<br/>Jaccard ~0.8"]
+    D --> E["Embedding dedup<br/>cosine ~0.95"]
+    E -->|"cap per cluster,<br/>not down to one"| F["Decontaminate against<br/>every eval set"]
+    F --> G["Only now split<br/>train and test"]
+```
+
 **Follow-ups:** Why is MinHash preferred over pairwise cosine similarity at scale? How would you pick the Jaccard threshold rather than just taking 0.8 on faith?
 
 </details>
@@ -294,6 +381,19 @@ Where PRMs really earn their keep is inference-time: reranking best-of-N, or gui
 Two caveats worth raising. First, if you have a real verifier (unit tests, an answer checker), you do not need an ORM at all, RLVR uses the checker directly and there is nothing to hack in the reward. Second, PRMs are themselves hackable and step boundaries are ill-defined for free-form reasoning.
 
 Practical order: verifier reward first, ORM if the task is not verifiable, PRM only when the reward is too sparse to learn from.
+
+**Worth sketching.** it makes the credit-assignment difference visible instead of asserted.
+
+```mermaid
+flowchart TD
+    A{"Programmatic verifier<br/>available?"} -->|"yes"| B["RLVR: use the checker,<br/>no reward model to hack"]
+    A -->|"no"| C["Trajectory:<br/>step 1 to step n"]
+    C --> D["ORM: one scalar<br/>on the final answer"]
+    C --> E["PRM: one score<br/>per step"]
+    D --> F["Cheap labels,<br/>blind credit assignment"]
+    E --> G["Step labels from humans,<br/>or from rollout success rate"]
+    G --> H["Prunes tree search,<br/>reranks best-of-N"]
+```
 
 **Follow-ups:** How would you generate PRM labels without human annotators, and what bias does that introduce? Why might a PRM used as a best-of-N reranker degrade as N grows?
 
@@ -333,6 +433,19 @@ Two caveats that show real experience: activations still scale with batch × seq
 
 Operational notes worth volunteering: pin the exact base-model version an adapter was trained against (adapters are meaningless deltas without it); version adapters like code with eval gates; and if one adapter gets 95% of traffic, merging *that one* into a dedicated replica may be worth the zero overhead.
 
+**Worth sketching.** it shows where the economics come from: one resident base, many small deltas.
+
+```mermaid
+flowchart LR
+    R1["Request for tenant A"] --> P["One batched forward<br/>through one base copy"]
+    R2["Request for tenant B"] --> P
+    LA["Adapter A, tens of MB"] --> P
+    LB["Adapter B, tens of MB"] --> P
+    P --> OUT["Per-request outputs"]
+    COLD["Cold adapters paged<br/>from CPU memory"] --> LB
+    NEW["New version:<br/>hot-swap the adapter id"] --> LA
+```
+
 **Follow-ups:** Why is merging into a 4-bit quantized base problematic? How would you design serving for 500 tenant-specific fine-tunes with skewed traffic?
 
 </details>
@@ -350,6 +463,19 @@ QLoRA fine-tunes LoRA adapters in bf16 on top of a base model whose frozen weigh
 Crucially, compute still happens in bf16: weights are dequantized block-by-block on the fly for each matmul; gradients flow through the dequantized weights into the LoRA params only. The base's 4-bit tensors are never updated.
 
 **What you give up**: the base model you're adapting is a slightly degraded version of itself - quantization noise the adapter partly compensates for, but subtle regressions can appear on tasks outside your fine-tuning distribution. Dequantization overhead makes training somewhat slower per step than bf16 LoRA. And there's a deployment mismatch to manage: the adapter was optimised against the *quantized* base, so serving it on the fp16 base (or merging) shifts the function slightly - usually fine, but worth an eval pass.
+
+**Worth sketching.** it makes clear the 4-bit tensors are only ever read, never updated.
+
+```mermaid
+flowchart LR
+    A["NF4 base weights,<br/>frozen, block size 64"] -->|"dequantize per matmul"| B["bf16 compute"]
+    C["Block constants<br/>requantized to 8-bit"] --> A
+    D["LoRA adapters in bf16"] --> B
+    B --> E["Activations"]
+    E -->|"backward"| F["Gradients pass through base,<br/>land only on adapters"]
+    F --> D
+    G["Paged optimizer spills<br/>states to CPU RAM"] --> F
+```
 
 **Follow-ups:** Why are normal-distribution quantiles the right levels for weight quantization? Your QLoRA adapter evals worse when served on the fp16 base - why, and what would you do?
 
@@ -370,6 +496,18 @@ $$P(y_w \succ y_l \mid x) = \sigma\big(r_\theta(x, y_w) - r_\theta(x, y_l)\big)$
 so you minimise $-\log\sigma(r_\theta(x,y_w) - r_\theta(x,y_l))$ - logistic regression on score differences. Only *differences* are identified, so absolute rewards have an arbitrary offset (some setups normalise or anchor them). With k-way rankings, you decompose into pairs.
 
 **Evaluation**: held-out preference accuracy (how often the RM agrees with humans; ~70-80% is typical and bounded by annotator agreement) plus targeted probes for known failure modes - length bias, sycophancy, format bias. The RM is the load-bearing proxy for the whole RLHF run: the policy will exploit any systematic error it has, which is why RM quality, fresh on-distribution preference data, and periodic RM retraining matter more than PPO hyperparameters.
+
+**Worth sketching.** the loop back to the sampling model is the part candidates leave out.
+
+```mermaid
+flowchart LR
+    A["Prompt"] --> B["Sample 2 responses<br/>from the SFT model"]
+    B --> C["Annotator picks the better one<br/>under a written rubric"]
+    C --> D["Scalar head on<br/>the SFT backbone"]
+    D --> E["Bradley-Terry loss on<br/>the score difference"]
+    E -->|"only differences<br/>are identified"| F["Reward model"]
+    F --> G["Probe for length,<br/>format and sycophancy bias"]
+```
 
 **Follow-ups:** Why sample RM training responses from the SFT model rather than another model? How would you detect and correct length bias in a reward model?
 
@@ -392,6 +530,19 @@ where $\pi_{ref}$ is the frozen SFT model. It exists for two reasons:
 
 β sets the tradeoff: too high and the model barely changes; too low and you get hacking. Teams monitor the KL-vs-reward frontier during training and treat rising reward with exploding KL as a red flag, not progress. The KL is usually implemented per-token as $\log\pi(y_t) - \log\pi_{ref}(y_t)$ folded into the reward.
 
+**Worth sketching.** it separates the PPO loop from the KL leash, which are two independent ideas people fuse.
+
+```mermaid
+flowchart LR
+    A["Policy"] -->|"sample responses"| B["Reward model scores them"]
+    B --> C["Advantages from<br/>critic and GAE"]
+    C --> D["Clipped policy update"]
+    D --> A
+    E["Frozen reference,<br/>the SFT model"] -->|"per-token KL penalty"| B
+    D --> F{"Reward rising,<br/>KL exploding?"}
+    F -->|"yes"| G["Hacking, not progress:<br/>raise beta or stop"]
+```
+
 **Follow-ups:** What do you monitor during a PPO run to catch failure early? Why does PPO clip probability ratios instead of just taking a bigger learning rate?
 
 </details>
@@ -412,6 +563,20 @@ Concrete examples seen in practice:
 - **Degenerate exploits**: off-distribution token sequences or repetition that happen to score high with a weak RM - the failure mode the KL penalty exists to prevent.
 
 Mitigations: the **KL penalty** to a reference model (keeps the policy where the RM is calibrated); **early stopping** using the known pattern that gold-standard quality rises then falls as proxy reward climbs; **fresh on-policy preference data** and periodic RM retraining (iterated RLHF), so the RM stays accurate on what the policy now produces; **RM ensembles** or worst-case-over-ensemble rewards; explicit **debiasing** (length-penalised rewards); **hardened verifiers** with hidden tests and sandbox integrity checks for code RL; and human spot-checks of high-reward samples - the cheapest and most reliably informative mitigation.
+
+**Worth sketching.** drawing the cycle shows why rising reward is not evidence of anything on its own.
+
+```mermaid
+flowchart TD
+    A["Annotators mildly prefer<br/>longer, confident answers"] --> B["RM inherits the bias"]
+    B --> C["Policy maximises RM score"]
+    C --> D["Padded, sycophantic,<br/>over-refusing output"]
+    D -->|"proxy reward up,<br/>true quality down"| B
+    C --> E["KL to reference bounds<br/>where the search can go"]
+    D --> F["Read the highest-reward<br/>samples by hand"]
+    F --> G["Fresh on-policy pairs,<br/>retrain the RM"]
+    G --> B
+```
 
 **Follow-ups:** Reward is climbing steadily on your run - what evidence distinguishes genuine improvement from hacking? How would you harden a unit-test reward against gaming?
 
@@ -436,6 +601,19 @@ Hence the paper's title: *your language model is secretly a reward model*. The p
 **Reading the objective**: increase the log-probability of the chosen response relative to the reference model, decrease it for the rejected one, with the sigmoid weighting gradients most heavily where the implicit reward currently ranks the pair *wrong*. β plays the same role as the RLHF KL coefficient - how far from the reference the policy is allowed to move to fit preferences.
 
 **Mechanics**: you need the frozen reference model (usually your SFT checkpoint) for the log-ratios - so two models in memory, or precomputed reference log-probs. Training is as stable and cheap as SFT: one forward/backward per pair member, no generation during training, standard supervised infrastructure. Known behaviours to mention: DPO can push down the absolute likelihood of *both* responses (only the margin is constrained), and it can overfit preference idiosyncrasies - motivating variants like IPO.
+
+**Worth sketching.** it names exactly which three moving parts of PPO the reparameterisation deletes.
+
+```mermaid
+flowchart LR
+    A["Preference pair:<br/>chosen and rejected"] --> B["Policy log-probs"]
+    A --> C["Frozen reference log-probs"]
+    B --> D["Implicit reward:<br/>beta times the log ratio"]
+    C --> D
+    D --> E["Bradley-Terry loss<br/>on the margin"]
+    E --> B
+    F["Reward model, critic,<br/>generation loop"] -->|"all collapse away"| D
+```
 
 **Follow-ups:** What role does β play and what happens at very small or large values? Why does the const(x) term cancel, and why does that matter? What's lost by never sampling from the policy during training?
 
@@ -473,6 +651,18 @@ All three are DPO-family offline preference methods; each fixes a specific pain 
 
 Framework support (TRL implements all three) makes trying them cheap; in practice, well-tuned DPO remains the default, and these are the tools you reach for when your *data shape* (KTO), *label noise* (IPO), or *pipeline budget* (ORPO) says otherwise.
 
+**Worth sketching.** it turns three papers into one question about the shape of your data.
+
+```mermaid
+flowchart TD
+    A{"What shape is<br/>your feedback?"} -->|"unpaired thumbs up/down"| B["KTO"]
+    A -->|"pairs"| C{"Labels noisy or<br/>near-deterministic?"}
+    C -->|"yes"| D["IPO: squared loss,<br/>margin saturates"]
+    C -->|"no"| E{"Want one run and<br/>no reference model?"}
+    E -->|"yes"| F["ORPO: SFT loss plus<br/>odds-ratio penalty"]
+    E -->|"no"| G["Well-tuned DPO"]
+```
+
 **Follow-ups:** Why does DPO's margin grow unboundedly and why is that bad? You have 500k thumbs-up/down events from production - which method and why?
 
 </details>
@@ -509,6 +699,18 @@ Fine-tune evaluation is a *differential* measurement: the question is not "is th
 
 **Key practical points**: (1) CPT causes forgetting at scale - standard recipes mix a substantial replay fraction of general-domain data (frequently ~10-50%) into the domain corpus, and use a lower LR than original pretraining with warmup. (2) CPT degrades chat behaviour - you're training on raw text - so the pipeline is **CPT → SFT (→ preference tuning)**: re-instruct the model after knowledge injection. (3) The full decision stack is: RAG for retrievable/fresh facts, CPT for internalised domain fluency, SFT for behaviour - real domain systems (legal, medical, finance) often need all three.
 
+**Worth sketching.** it maps each observed symptom onto a different stage rather than one generic "train it more".
+
+```mermaid
+flowchart TD
+    A{"What is actually failing?"} -->|"needs fresh or<br/>citable facts"| B["RAG"]
+    A -->|"reasons badly in-domain<br/>even with good context"| C["Continued pretraining<br/>on raw corpus"]
+    A -->|"knows it, formats badly"| D["SFT on pairs<br/>with loss masking"]
+    C -->|"chat behaviour destroyed"| D
+    D --> E["Preference tuning"]
+    C --> F["Replay ~10-50% general data,<br/>lower LR, warmup"]
+```
+
 **Follow-ups:** Why does SFT inject knowledge so poorly compared to CPT? Design the data mixture for adapting a 8B model to clinical notes - what fractions and why? How would you check the CPT actually added knowledge rather than style?
 
 </details>
@@ -527,6 +729,20 @@ Pitfalls, the part interviewers care about:
 - **Distribution mismatch**: synthetic prompts drift from real user traffic - clean, well-formed, polite - so the model underperforms on messy production inputs. Seed generation from real (privacy-scrubbed) traffic.
 - **Contamination**: synthetic data can reproduce benchmark items the teacher memorised - decontaminate against your evals.
 - **Licensing**: many API providers' terms restrict using outputs to train competing models - a legal check, not just a technical one.
+
+**Worth sketching.** it shows where a verifier changes the economics and where you are stuck with judges.
+
+```mermaid
+flowchart LR
+    A["Seed from real,<br/>scrubbed traffic"] --> B["Generate with persona and<br/>difficulty conditioning"]
+    B --> C["k candidates per prompt"]
+    C --> D{"Verifier exists?"}
+    D -->|"yes"| E["Rejection sample:<br/>keep only passing"]
+    D -->|"no"| F["Judge filter plus<br/>a human audit slice"]
+    E --> G["Dedup, measure diversity,<br/>decontaminate"]
+    F --> G
+    G --> H["Keep human data<br/>in the mix"]
+```
 
 **Follow-ups:** How would you measure whether a synthetic dataset is diverse *enough*? Why does rejection sampling change the quality economics for math/code but not for creative writing?
 
@@ -576,6 +792,23 @@ The levers, mapped to which term they attack:
 - **LoRA/QLoRA** → grads + optimizer states: only ~0.1-1% of params are trainable, so optimizer state collapses to ~nothing; QLoRA additionally shrinks weights to ~0.5 bytes/param (NF4). That's how 7B training fits in <16 GB.
 
 This accounting question is a favourite because it instantly reveals whether a candidate has actually planned a training run or only read about them.
+
+**Worth sketching.** stacking the bytes shows the optimizer, not the model, is what will not fit.
+
+```mermaid
+flowchart LR
+    A["One parameter,<br/>7B of them"] --> B["bf16 weights: 2 B"]
+    A --> C["bf16 grads: 2 B"]
+    A --> D["fp32 master copy: 4 B"]
+    A --> E["Adam m: 4 B"]
+    A --> F["Adam v: 4 B"]
+    B --> G["16 bytes/param<br/>= ~112 GB static"]
+    C --> G
+    D --> G
+    E --> G
+    F --> G
+    G --> H["Activations on top,<br/>before a single token moves"]
+```
 
 **Follow-ups:** Where does 8-bit Adam save memory and what's the risk? Redo the math for LoRA at r=16 - what's now the dominant memory term? Why keep fp32 master weights at all in bf16 training?
 
@@ -676,6 +909,19 @@ Then read 100 random selected examples yourself. Every selection pipeline I have
 
 The part that separates candidates: **ablate against random.** Train on a random 20k, your selected 20k, and 20k selected on a single axis. If the elaborate pipeline does not beat random 20k on a real eval, you built a Rube Goldberg machine and random is the better engineering decision. That baseline is non-negotiable, and it fails more often than people admit.
 
+**Worth sketching.** the funnel ends at the baseline it has to beat, which is the point of the answer.
+
+```mermaid
+flowchart LR
+    A["500k mixed quality"] --> B["Hard filters: dedup, malformed,<br/>wrong language, artifacts"]
+    B --> C["Quality score:<br/>judge or reward model"]
+    C --> D["Difficulty score:<br/>IFD or response perplexity"]
+    D --> E["Cluster, cap per cluster"]
+    E --> F["Per-capability budget<br/>matched to traffic"]
+    F --> G["20k selected"]
+    G -->|"must beat"| H["Random 20k"]
+```
+
 **Follow-ups:** How would you handle the case where your judge model and your target model share a base, so the judge systematically prefers its own style? What changes if the 500k examples come from 4 different sources with very different quality profiles?
 
 </details>
@@ -766,6 +1012,19 @@ Why it won for reasoning RL:
 
 Tradeoffs to name: many samples per prompt makes generation the compute bottleneck (mitigated by fast inference engines in the loop); uniform std-normalization has known biases (length effects; degenerate groups where all rewards are equal contribute nothing); and follow-up variants adjust the normalization and clipping details. Conceptually, it's "REINFORCE with a per-prompt Monte-Carlo baseline + PPO clipping" - cheap, scalable, and well-matched to verifiable-reward RL.
 
+**Worth sketching.** it shows the group mean doing the critic's job, and the case where it does nothing at all.
+
+```mermaid
+flowchart LR
+    A["One prompt"] --> B["Sample G responses"]
+    B --> C["Reward each one"]
+    C --> D["Advantage = reward minus<br/>group mean, over group std"]
+    D --> E["Clipped update plus<br/>KL to reference"]
+    E --> A
+    C --> F{"All G pass,<br/>or all G fail?"}
+    F -->|"yes"| G["Advantages are zero,<br/>no gradient from this prompt"]
+```
+
 **Follow-ups:** What happens to GRPO's gradient on prompts the model always (or never) solves, and what does that imply for data curation? Why is the KL-to-reference term still needed with verifiable rewards?
 
 </details>
@@ -784,6 +1043,19 @@ Because they have **verifiable rewards**: a program - not a learned model - deci
 
 The broader significance: this is the test-time-compute paradigm - RL teaches the model *how to use more thinking tokens productively*, and verifiable domains are where that optimisation has traction. Extending it beyond math/code means building verifiers (or rubric/judge proxies) for softer domains, which is an open frontier.
 
+**Worth sketching.** the two entry paths side by side show precisely what the cold-start SFT is buying.
+
+```mermaid
+flowchart LR
+    A["Base model"] -->|"R1-Zero path,<br/>no SFT"| C["Reasoning RL,<br/>rule-based rewards"]
+    A --> B["Cold-start SFT on<br/>curated long CoT"]
+    B --> C
+    C --> Z["Long CoT emerges either way;<br/>readability only via B"]
+    C --> D["Rejection sample the RL model<br/>into a large new SFT set"]
+    D --> E["Final RL: reasoning plus<br/>general preferences"]
+    E --> F["Distil traces into<br/>small open models"]
+```
+
 **Follow-ups:** How do you stop a code-RL model from gaming the unit tests? Why did pure-RL R1-Zero produce messy outputs, and what does the cold-start SFT fix? What's the equivalent of a verifiable reward for, say, legal drafting?
 
 </details>
@@ -800,6 +1072,20 @@ The broader significance: this is the test-time-compute paradigm - RL teaches th
 2. **RLAIF**: generate response pairs, have the AI judge which better satisfies constitutional principles, train a preference model on those labels, then RL against it.
 
 The constitution matters beyond cost: it makes alignment criteria **explicit, inspectable, and editable** - you can read the principles, argue about them, and change a line of text instead of relabeling a million comparisons. It also avoids exposing human annotators to harmful content at scale. The residual risks are real and worth naming: an AI judge is a learned reward source, so reward hacking applies (the policy can learn to *look* constitutional), and principles under-specify edge cases - which is why constitutional pipelines still anchor to human oversight and evaluation.
+
+**Worth sketching.** it shows where human oversight moved to rather than letting you claim it disappeared.
+
+```mermaid
+flowchart LR
+    A["Written constitution"] --> B["Model critiques its<br/>own response"]
+    B --> C["Model revises it"]
+    C --> D["SFT on the revisions"]
+    D --> E["AI labeller ranks<br/>response pairs"]
+    A --> E
+    E --> F["Preference model"]
+    F --> G["RL against it"]
+    H["Humans audit the labeller<br/>and the principles"] --> E
+```
 
 **Follow-ups:** What biases does an LLM judge introduce and how do you measure them? If the AI labeller is the same model family being trained, what failure loops does that risk?
 
@@ -887,6 +1173,19 @@ Structured triage, ordered by base-rate of the bug:
 
 The meta-answer interviewers want: reproduce a concrete failing example end-to-end, diff training-time vs serve-time token sequences exactly, and change one variable at a time - most "the model got worse" incidents are pipeline bugs, not learning failures.
 
+**Worth sketching.** ordering the branches by base rate gives you the order you would actually debug in.
+
+```mermaid
+flowchart TD
+    A["Prod worse than base"] --> B{"Training tokens match<br/>serving tokens exactly?"}
+    B -->|"no"| C["Chat template or<br/>EOS mismatch"]
+    B -->|"yes"| D{"Labels only on<br/>assistant spans?"}
+    D -->|"no"| E["Loss masking bug"]
+    D -->|"yes"| F{"Right adapter, base revision,<br/>quantization, sampling params?"}
+    F -->|"no"| G["Serving configuration"]
+    F -->|"yes"| H["Replay real failing traffic:<br/>the eval set was not representative"]
+```
+
 **Follow-ups:** What single artefact would you log at training time to make this debugging trivial later? How do you catch template mismatch in CI before deploy?
 
 </details>
@@ -953,6 +1252,18 @@ If general data can't fix a specific regression, escalate to LoRA-only training 
 - **Loss masking stays per-example**: each example's prompt tokens masked, each response's EOS included.
 
 Nuances that signal depth: (1) some recipes skip the mask and accept contamination - for large diverse datasets the empirical damage is often small, but it's a measured risk, not a free pass, and it's most harmful with structured/similar examples where the model can genuinely exploit leakage; (2) packing changes the *effective* batch composition - a "batch" now weights long examples less per-sequence, subtly reweighting the loss toward short examples' tokens; (3) greedy bin-packing (first-fit decreasing) minimises leftover slack better than sequential filling.
+
+**Worth sketching.** it makes "contamination" concrete instead of a phrase you assert.
+
+```mermaid
+flowchart LR
+    A["Example 1"] --> P["One packed<br/>4096-token sequence"]
+    B["Example 2"] --> P
+    C["Example 3"] --> P
+    P -->|"naive concat"| X["Example 3 attends back<br/>into examples 1 and 2"]
+    P -->|"varlen cu_seqlens"| Y["Block-diagonal attention,<br/>position ids reset to 0"]
+    Y --> Z["Loss mask stays per example,<br/>every EOS kept"]
+```
 
 **Follow-ups:** Why is contamination worse on templated datasets than diverse ones? How do FlashAttention varlen kernels avoid materializing the block-diagonal mask? What breaks if you pack but forget to reset position IDs?
 
@@ -1049,6 +1360,19 @@ Entropy collapse plus verifier hacking, and the reward curve is why you did not 
 
 **Fixes:** raise sampling temperature or add an entropy bonus, filter degenerate groups, harden the verifier (sandbox with no network, no test-file access, and hold out tests the model never optimises against), separate reward components, and gate on held-out pass rate as the ship metric rather than train reward. Two known biases worth mentioning: dividing advantages by the group standard deviation biases toward low-variance prompts, and length-normalising the loss biases toward length. If your symptoms match, try removing them.
 
+**Worth sketching.** it gives a diagnosis order that deliberately does not start at the reward curve.
+
+```mermaid
+flowchart TD
+    A["Reward climbing,<br/>held-out dropping"] --> B{"Policy entropy<br/>still healthy?"}
+    B -->|"no"| C["All G samples identical,<br/>advantages go to zero"]
+    B -->|"yes"| D{"Read samples: does<br/>passing mean solving?"}
+    D -->|"no"| E["Verifier hacking:<br/>hidden tests, harden sandbox"]
+    D -->|"yes"| F{"Reward components<br/>logged separately?"}
+    F -->|"no"| G["Format or length term<br/>is dominating"]
+    F -->|"yes"| H["Refilter prompts: drop<br/>all-pass and all-fail"]
+```
+
 **Follow-ups:** How would you design a verifier that is genuinely hard to hack for a code task? Why does entropy collapse specifically kill GRPO harder than it kills PPO?
 
 </details>
@@ -1094,6 +1418,19 @@ The hard parts are the environment and credit assignment. The algorithm is the e
 **5. Guardrails.** KL to reference, watch entropy, hold out a task set the reward never touches.
 
 **6. Validate the reward before spending compute.** Run 50 rollouts with a strong model and read them. Check that "success" means what you think. It usually does not on the first try.
+
+**Worth sketching.** it puts the curriculum filter inside the loop, not in a preprocessing step you do once.
+
+```mermaid
+flowchart LR
+    A["Resettable sandbox,<br/>mocked external APIs"] --> B["N rollouts per task"]
+    B --> C["Terminal success check"]
+    C --> D["Group-relative advantage<br/>across the N rollouts"]
+    D --> E["Update on model tokens only,<br/>tool outputs masked out"]
+    E --> B
+    C --> F{"All N pass<br/>or all N fail?"}
+    F -->|"yes"| G["Drop the task,<br/>refilter the difficulty band"]
+```
 
 **Follow-ups:** How would you handle a task where success is only checkable by a human? Why is trajectory-level advantage tolerable here, and at what horizon does it stop working?
 

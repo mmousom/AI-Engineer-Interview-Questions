@@ -2,6 +2,12 @@
 
 50 questions: 14 basic, 21 intermediate, 15 advanced.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. Explain the bias-variance tradeoff. How do you tell which one is hurting your model?
@@ -18,6 +24,20 @@ You diagnose it from the **train/val gap**, not from theory:
 Learning curves sharpen the diagnosis: if val error is still falling as you add data, more data helps (variance problem); if train and val curves have plateaued together at a bad level, more data won't help (bias problem).
 
 A strong candidate adds the modern caveat: the classical U-shaped "more capacity → more overfitting" curve breaks down for heavily overparameterized networks. **Double descent** (Belkin et al.; Nakkiran et al.) shows test error can *decrease again* past the interpolation threshold - which is consistent with the empirical reality that scaling up transformers improves generalization. So "your model is too big" is rarely the right first hypothesis in deep learning; data quality, leakage, and training recipe usually matter more.
+
+**Worth sketching.** It turns the tradeoff into a diagnostic procedure, which is what the interviewer is actually asking for.
+
+```mermaid
+flowchart TD
+    A["Compare train error<br/>with val error"] --> B{"Train error high?"}
+    B -->|"yes, val close to train"| C["High bias"]
+    B -->|"no, val far above train"| D["High variance"]
+    C --> E["More capacity, better features,<br/>train longer, less regularization"]
+    D --> F["More data, augmentation,<br/>weight decay, early stopping"]
+    A --> G["Learning curve check"]
+    G -->|"val still falling as data grows"| D
+    G -->|"both plateaued together"| C
+```
 
 **Follow-ups:** Your val loss is much lower than train loss - what could cause that? (Dropout active only at train time, augmentation on train only, easier val distribution.) How does regularization move you along the tradeoff? Where does double descent leave the classical picture?
 
@@ -41,6 +61,19 @@ For overfitting, in rough order of preference:
 Karpathy's training recipe is the practical framing interviewers like: first *deliberately overfit* a small batch to near-zero loss to prove the model and pipeline can learn at all, then regularize back toward generalization. If you can't overfit 100 examples, you have a bug, not a regularization problem.
 
 Two traps worth naming: (1) a val loss that's suspiciously *better* than expected often means leakage, not brilliance; (2) in LLM fine-tuning, "overfitting" often shows up as behavioural regressions (loss on the SFT set drops while general capability degrades - catastrophic forgetting), so you monitor held-out capability evals, not just the fine-tuning loss.
+
+**Worth sketching.** Drawing the gate before the regularization branch shows you separate bugs from generalization problems.
+
+```mermaid
+flowchart TD
+    A["New model and pipeline"] --> B{"Can you drive loss to<br/>near zero on 100 examples?"}
+    B -->|"no"| C["It is a bug: check labels,<br/>masking, LR, data loader"]
+    C --> B
+    B -->|"yes"| D["Train on full data,<br/>watch train against val"]
+    D --> E{"Val loss rising<br/>while train falls?"}
+    E -->|"yes"| F["More data, augmentation,<br/>weight decay, early stop"]
+    E -->|"no, both high"| G["More capacity<br/>or train longer"]
+```
 
 **Follow-ups:** Why start by overfitting a single batch? Your SFT loss is decreasing nicely but users say the model got worse - what happened? When would you accept some overfitting deliberately?
 
@@ -98,6 +131,21 @@ When CV is wrong or impractical:
 
 For LLM work the same discipline shows up as: held-out eval suites you don't train on, decontamination of pretraining data against benchmarks, and keeping a fresh, never-optimised-against eval for final go/no-go decisions - because prompt tuning against an eval overfits it exactly like hyperparameter tuning overfits a val set.
 
+**Worth sketching.** The loop on the left and the single arrow into test is the whole point: one set is spent repeatedly, the other exactly once.
+
+```mermaid
+flowchart LR
+    A["All data"] --> B["Train split"]
+    A --> C["Validation split"]
+    A --> D["Test split, sealed"]
+    B --> E["Fit parameters"]
+    E --> F["Score on validation"]
+    C --> F
+    F -->|"change hyperparams, architecture,<br/>checkpoint, stopping point"| E
+    E --> G["Score on test, once"]
+    D --> G
+```
+
 **Follow-ups:** How does the same-user-in-both-splits failure actually look in the metrics? What's nested cross-validation for? How would you decontaminate an LLM eval set?
 
 </details>
@@ -118,6 +166,20 @@ Which metric to optimise is a *cost* question, not a math question:
 Also know that precision/recall/F1 are **threshold-dependent** - they describe one operating point on the classifier's score distribution. Reporting "F1 = 0.83" without saying how the threshold was chosen (and on which split) is a red flag; sweep the threshold on validation data and pick the operating point that matches the product's cost structure.
 
 This vocabulary transfers directly to LLM evals: hallucination detection, toxicity filtering, and RAG retrieval are all precision/recall problems (retrieval's recall@k is literally recall), and interviewers expect you to move fluently between the classic and LLM framings.
+
+**Worth sketching.** Drawing which cells feed which metric stops you fumbling the denominators under pressure.
+
+```mermaid
+flowchart TD
+    A["Model flags positive"] --> B["TP: really positive"]
+    A --> C["FP: false alarm"]
+    D["Model says negative"] --> E["FN: missed positive"]
+    D --> F["TN: really negative"]
+    B --> G["Precision = TP / (TP + FP)"]
+    C --> G
+    B --> H["Recall = TP / (TP + FN)"]
+    E --> H
+```
 
 **Follow-ups:** Why the harmonic mean rather than arithmetic? Precision is 0.95 but the product team is unhappy - what would you check? How do micro- vs macro-averaged F1 differ on imbalanced multiclass?
 
@@ -173,6 +235,20 @@ So on normalized vectors all three agree on ranking; the choice only matters whe
 
 Operationally, your vector index metric must match: FAISS/pgvector/HNSW indexes are built for inner product, L2, or cosine, and a mismatch silently degrades retrieval quality. Two more advanced points worth volunteering: raw LLM hidden states are **anisotropic** (squashed into a narrow cone), which is why you use a contrastively trained embedder rather than pooling base-model activations; and **Matryoshka (MRL) embeddings** are trained so truncating to the first k dims still works, letting you trade recall for memory/latency.
 
+**Worth sketching.** The last box is the part people forget, and drawing it shows you have actually shipped a vector index.
+
+```mermaid
+flowchart TD
+    A["Choose a similarity"] --> B{"Vectors unit-normalized?"}
+    B -->|"yes"| C["Cosine, dot and L2<br/>all give the same ranking"]
+    B -->|"no"| D{"Does magnitude<br/>carry information?"}
+    D -->|"yes, trained on raw dot"| E["Dot product"]
+    D -->|"no"| F["Normalize, then cosine"]
+    C --> G["ANN index metric must match<br/>the training objective"]
+    E --> G
+    F --> G
+```
+
 **Follow-ups:** Why does normalizing make Euclidean and cosine equivalent - show it. When would dot product beat cosine in a recommender? What breaks if you index cosine-trained embeddings with an L2 metric without normalizing?
 
 </details>
@@ -192,6 +268,17 @@ Mapping the modern LLM pipeline is the real point of the question:
 - Genuinely **unsupervised** steps still exist around the edges: clustering user queries to discover intents, deduplicating pretraining corpora via near-duplicate detection.
 
 The one-liner that lands well: self-supervision solved the labelling bottleneck - the reason LLMs work is that next-token prediction converts the entire internet into free supervised training data.
+
+**Worth sketching.** Labelling the arrows rather than the boxes is what makes the taxonomy stick: the paradigm lives in how the supervision was obtained.
+
+```mermaid
+flowchart LR
+    A["Raw web text"] -->|"self-supervised:<br/>next token is the label"| B["Base model"]
+    B -->|"supervised:<br/>curated prompt and response"| C["SFT model"]
+    C -->|"RL on scalar reward,<br/>or DPO on preference pairs"| D["Aligned model"]
+    E["Co-occurring pairs"] -->|"self-supervised:<br/>contrastive"| F["Embedding model"]
+    G["Unlabelled queries"] -->|"unsupervised:<br/>clustering, dedup"| H["Discovered intents"]
+```
 
 **Follow-ups:** Is a reward model trained supervised or by RL? Why is next-token prediction such a powerful pretext task compared to, say, autoencoding? Where does RLAIF/constitutional-style feedback fit in this taxonomy?
 
@@ -216,6 +303,21 @@ Why trees beat MLPs on tabular:
 Neural nets win when there is structure to exploit: high-cardinality entities you want shared embeddings for, multi-modal input (free text or images beside the table), or transfer from a pretrained model. The honest default in 2026 is still: LightGBM baseline first, and make anything fancier beat it.
 
 Common misconception to avoid: saying random forest "boosts", or quoting `n_estimators=1000` for GBDT with no early stopping.
+
+**Worth sketching.** Parallel arrows against a feedback loop makes the variance-versus-bias distinction visual rather than memorised.
+
+```mermaid
+flowchart LR
+    A["Bootstrap samples"] --> B["Deep tree 1"]
+    A --> C["Deep tree 2"]
+    A --> D["Deep tree k"]
+    B --> E["Average: variance down,<br/>adding trees never hurts"]
+    C --> E
+    D --> E
+    F["Residual of the<br/>current ensemble"] --> G["Shallow tree t"]
+    G -->|"add, scaled by learning rate"| H["Ensemble: bias down,<br/>needs early stopping"]
+    H --> F
+```
 
 **Follow-ups:** Why does CatBoost's ordered target encoding exist, and what leakage does it prevent? How would you get calibrated probabilities out of a boosted tree?
 
@@ -303,6 +405,21 @@ Leakage is any path by which information unavailable at prediction time contamin
 
 Detection heuristics: results too good to be true (near-perfect AUC on a hard problem); one feature with absurd importance; **adversarial validation** - train a classifier to distinguish train from test rows, and if it succeeds, your splits differ systematically; and large offline→online metric gaps.
 
+**Worth sketching.** Four gates on one path is a much better answer than a list, because it shows leakage is a property of the pipeline order, not of the model.
+
+```mermaid
+flowchart TD
+    A["Raw data"] --> B{"Split before<br/>fitting any transform?"}
+    B -->|"no: scaler or encoder<br/>saw the test rows"| L["Leak"]
+    B -->|"yes"| C{"Split by group?"}
+    C -->|"no: same user in<br/>train and test"| L
+    C -->|"yes"| D{"Split by time?"}
+    D -->|"no: random folds<br/>train on the future"| L
+    D -->|"yes"| E{"Any feature caused<br/>by the label?"}
+    E -->|"yes: account_frozen"| L
+    E -->|"no"| F["Estimate you can trust"]
+```
+
 **Follow-ups:** Your model gets 0.99 AUC on a fraud problem - walk me through your audit. How does k-fold CV make preprocessing leakage worse if done naively? How would you check whether an LLM has memorized your eval set?
 
 </details>
@@ -341,6 +458,19 @@ Why it matters: any system that thresholds on expected cost - fraud review queue
 
 LLM angle worth volunteering: base models are surprisingly well calibrated on multiple-choice tasks (token-probability vs accuracy), and RLHF tends to *worsen* that calibration - the GPT-4 technical report showed the post-RLHF model's calibration curve visibly degraded versus the pretrained model. Verbalised confidence ("I'm 90% sure") is a separate, generally worse-calibrated channel than token logprobs.
 
+**Worth sketching.** The loop back to the reliability diagram shows calibration is measured, fixed, then re-measured, and never fitted on train.
+
+```mermaid
+flowchart LR
+    A["Validation logits"] --> B["Bin by confidence"]
+    B --> C["Reliability diagram<br/>and ECE"]
+    C --> D{"Observed rate below<br/>stated confidence?"}
+    D -->|"yes, overconfident"| E["Fit a single T on val"]
+    D -->|"no, near the diagonal"| F["Ship as is"]
+    E --> G["Divide logits by T:<br/>ranking and AUC unchanged"]
+    G --> C
+```
+
 **Follow-ups:** Why does temperature scaling leave accuracy and AUC unchanged? How does class imbalance interact with calibration under resampling? How would you calibrate an LLM judge that outputs a 1-10 score?
 
 </details>
@@ -362,6 +492,21 @@ First, fix the *measurement*, then the *training*, and keep the two concerns sep
 
 Critical subtleties: evaluate on the *natural* distribution, never a rebalanced one; if you resample or reweight, your output probabilities are biased and must be **recalibrated** before thresholding; and validate temporally, because fraud patterns drift and adversaries adapt.
 
+**Worth sketching.** Two separate lanes converging on the threshold is the structure of the answer: fix measurement, fix training, then recalibrate before you pick an operating point.
+
+```mermaid
+flowchart TD
+    A["0.5% positive"] --> B["Fix measurement"]
+    B --> C["PR-AUC, precision at the<br/>review budget, cost matrix"]
+    A --> D["Fix training"]
+    D --> E["Class weights<br/>or focal loss"]
+    D --> F["Resampling, inside<br/>the training fold only"]
+    E --> G["Recalibrate: reweighting<br/>biases the probabilities"]
+    F --> G
+    C --> H["Threshold on expected cost,<br/>score the natural distribution"]
+    G --> H
+```
+
 **Follow-ups:** You oversampled and now predicted probabilities are inflated - why, and how do you correct them? When is undersampling actually preferable? How do delayed fraud labels (chargebacks arriving 60 days later) change your evaluation?
 
 </details>
@@ -375,6 +520,19 @@ Critical subtleties: evaluate on the *natural* distribution, never a rebalanced 
 **Adam** adds a second idea: **per-parameter adaptive step sizes**. It tracks both the first moment m (like momentum, β₁=0.9) and second moment v - an EMA of squared gradients (β₂=0.999 classically, ~0.95 in LLM practice) - and updates with `w ← w − lr · m̂ / (√v̂ + ε)`. Dividing by √v̂ normalizes each parameter's step by its typical gradient magnitude: parameters with rare/small gradients (embedding rows for rare tokens) get relatively larger steps; parameters with large, noisy gradients get damped. The hats are **bias correction** - both EMAs are initialized at zero and severely underestimate their targets early in training; without correction, early steps would be badly mis-scaled.
 
 Why this matters for transformers: gradient scale varies enormously across a deep transformer (embeddings vs LayerNorm gains vs attention projections), and a single global LR can't serve them all - SGD is notoriously hard to make work on transformers, while Adam-family optimizers are robust. The flip side: Adam keeps two extra fp32 states per parameter (~8 bytes/param), a major memory cost that motivates 8-bit optimizers and ZeRO-style sharding.
+
+**Worth sketching.** Drawing the two EMAs as separate branches makes it obvious what bias correction is correcting and why it only matters early.
+
+```mermaid
+flowchart LR
+    A["Mini-batch gradient g"] --> B["m = b1 m + (1 - b1) g<br/>direction memory"]
+    A --> C["v = b2 v + (1 - b2) g squared<br/>scale memory"]
+    B --> D["Bias correct both:<br/>they start at zero"]
+    C --> D
+    D --> E["step = lr m_hat / (sqrt(v_hat) + eps)"]
+    E --> F["w = w - step"]
+    F -->|"next batch"| A
+```
 
 **Follow-ups:** Why does Adam need bias correction - what happens without it? Why does SGD+momentum still often beat Adam on convnets? What's the memory footprint of Adam for a 7B model and how do you reduce it?
 
@@ -400,6 +558,18 @@ Why the coupled version is broken: parameters with large gradient history (large
 
 AdamW restores a clean interpretation - every weight shrinks by the same fraction lr·λ per step - decouples the λ/lr search dimensions, and empirically generalizes better. It's the default in essentially every modern transformer recipe (GPT-series, Llama, etc.), with typical settings λ ≈ 0.1, β₂ ≈ 0.95, and decay disabled for biases, LayerNorm/RMSNorm parameters, and often embeddings.
 
+**Worth sketching.** Two paths from the same gradient, differing only in which side of the division the decay sits, is the entire fix in one picture.
+
+```mermaid
+flowchart TD
+    A["Gradient g"] --> B["Adam plus L2:<br/>g becomes g + lam w"]
+    B --> C["Divide by sqrt of v_hat"]
+    C --> D["Decay diluted exactly where<br/>gradients are largest"]
+    A --> E["AdamW: adaptive step<br/>computed from g alone"]
+    E --> F["Then w = w - lr lam w"]
+    F --> G["Same fractional shrinkage<br/>for every weight"]
+```
+
 **Follow-ups:** Why is weight decay ≡ L2 under SGD but not under Adam? Why exclude norm parameters from decay? What happens to effective weight decay as the LR is cosine-annealed to near zero?
 
 </details>
@@ -418,6 +588,17 @@ After warmup, the standard is **cosine decay** from peak LR down to ~10% of peak
 
 A modern alternative worth naming: **WSD (warmup - stable - decay)** - hold LR constant after warmup, then decay sharply only in the last ~10-20% of training. The benefit is operational: you can branch a decayed "finished" checkpoint off a still-running stable-phase run at any time, which suits continued pretraining and data-mixture experiments (used by MiniCPM and DeepSeek-era recipes).
 
+**Worth sketching.** Drawing WSD as a branch off the stable phase explains its whole selling point: you can cut a finished checkpoint whenever you like.
+
+```mermaid
+flowchart LR
+    A["LR near zero"] -->|"linear ramp over<br/>hundreds to thousands of steps"| B["Peak LR"]
+    B -->|"cosine decay over<br/>the token budget"| C["About 10% of peak"]
+    B -->|"WSD: hold flat"| D["Stable phase"]
+    D -->|"sharp decay over<br/>the last 10 to 20%"| E["Finished checkpoint"]
+    D -->|"branch at any point"| F["Data mixture and continued<br/>pretraining experiments"]
+```
+
 **Follow-ups:** What actually goes wrong if you skip warmup - describe the failure signature in the loss/grad-norm curves. Why does cosine-to-zero interact badly with wanting to resume training? How would you set peak LR for a model 10× bigger?
 
 </details>
@@ -433,6 +614,18 @@ The efficiency argument is the heart of a good answer. Naively, you could comput
 Reverse mode is the right direction because the loss is scalar: one output, many inputs → one backward sweep gets every derivative. (Forward-mode is efficient in the opposite regime, few inputs/many outputs.)
 
 Engineering consequences worth stating: total training compute is ~3× forward (hence the ≈6·N·D FLOPs rule of thumb for transformers with N params and D tokens); the cached activations dominate training memory, which is why **activation checkpointing** trades recompute for memory; and frameworks implement this as autograd over a recorded computation graph - every op registers its VJP.
+
+**Worth sketching.** The cached activations on the forward arrows are what make the backward pass cheap and training memory expensive, and the sketch puts both facts in one place.
+
+```mermaid
+flowchart LR
+    A["input x"] -->|"forward"| B["layer 1<br/>cache activations"]
+    B -->|"forward"| C["layer 2<br/>cache activations"]
+    C -->|"forward"| D["scalar loss"]
+    D -->|"seed with dL/dL = 1"| E["VJP through layer 2:<br/>grad w2 and grad input"]
+    E -->|"reuse the running product"| F["VJP through layer 1:<br/>grad w1"]
+    F --> G["Every gradient in one sweep,<br/>about 2x the forward cost"]
+```
 
 **Follow-ups:** Why is training memory so much larger than inference memory? What is activation checkpointing and what's its compute overhead? Where does the 6ND estimate come from?
 
@@ -491,6 +684,18 @@ Why BN is wrong for transformers/LLMs:
 - LayerNorm has none of these issues: each token normalizes itself, identical math at train and inference, any batch size.
 
 Modern refinements worth knowing: **RMSNorm** (Llama, Mistral, most current LLMs) drops mean-centring and just divides by the root-mean-square, with a learned gain - cheaper, empirically as good. **Placement matters more than flavour**: the original transformer used **post-norm** (normalize after the residual add), which is unstable at depth and demands careful warmup; **pre-norm** (normalize inside the branch, before attention/MLP) keeps an unimpeded identity path through the residual stream and trains stably - universal since GPT-2. Some recent models add extra norms (e.g., QK-norm on attention queries/keys) specifically to prevent attention-logit blowups at scale.
+
+**Worth sketching.** Naming the axis each one reduces over is the answer; everything else on the diagram follows from that single choice.
+
+```mermaid
+flowchart TD
+    A["Activations:<br/>batch x tokens x features"] --> B["BatchNorm: statistics<br/>along the batch axis"]
+    A --> C["LayerNorm: statistics along<br/>features, one token at a time"]
+    B --> D["Needs running statistics<br/>at inference"]
+    B --> E["Degrades at small batch,<br/>padding, variable length"]
+    C --> F["Identical math at<br/>train and inference"]
+    C --> G["RMSNorm: drop the mean,<br/>divide by root mean square"]
+```
 
 **Follow-ups:** Why does BN generally underperform even in encoder-only transformers where decoding isn't an issue? What does RMSNorm remove and why is that OK? Explain mechanically why post-norm at depth is unstable.
 
@@ -623,6 +828,20 @@ Designing it out:
 
 Detection, because prevention is never complete: compare distributions of served vectors against the training set per feature (PSI or KL against a reference window) and alert. Better, run a shadow job that replays logged requests through the training pipeline and diffs feature values. Any nonzero diff rate is a bug. I would much rather read "5% of rows disagree on feature X" than spend a week hunting a mysterious AUC drop.
 
+**Worth sketching.** Two boxes computing the same feature is the bug; the replay arrow underneath is the only thing that proves you do not have it.
+
+```mermaid
+flowchart TD
+    A["One feature definition"] --> B["Batch path:<br/>Spark or SQL job"]
+    A --> C["Serving path:<br/>request-time code"]
+    B --> D["Training rows"]
+    C --> E["Served feature vectors"]
+    D --> F["Model"]
+    E --> F
+    E -->|"log, then replay through<br/>the training pipeline"| G["Diff the values:<br/>any nonzero rate is a bug"]
+    D --> G
+```
+
 **Follow-ups:** Give me a concrete point-in-time join and show me where the naive version leaks. Your PSI alert fires on one feature. How do you tell a real upstream change from a broken pipeline?
 
 </details>
@@ -647,6 +866,20 @@ Traps I would raise unprompted:
 - **Novelty and primacy.** Week one is not steady state.
 
 For an LLM feature specifically, per-request cost is a co-primary metric, not a footnote. A 1% quality win that doubles token spend is not a win, and the offline eval is only a proxy for the online metric anyway.
+
+**Worth sketching.** Putting the peeking decision on the diagram forces the conversation you actually need to have with the team before launch, not after.
+
+```mermaid
+flowchart TD
+    A["Fix metric, minimum detectable<br/>effect, alpha and power"] --> B["Compute n per arm"]
+    B --> C["Launch, check<br/>sample ratio match"]
+    C -->|"ratio off"| D["Assignment is broken:<br/>stop, nothing downstream is real"]
+    C -->|"ratio fine"| E["Run to the<br/>pre-registered horizon"]
+    E --> F{"Team wants a<br/>live dashboard?"}
+    F -->|"yes"| G["Group sequential bounds or<br/>always-valid sequential p-values"]
+    F -->|"no"| H["Single read-out"]
+    G --> H
+```
 
 **Follow-ups:** Your metric is revenue per user, which is heavy-tailed and mostly zero. What does that do to your sample size and what would you do about it? How would you detect a novelty effect rather than assume one?
 
@@ -730,6 +963,18 @@ Two things I would insist on reporting:
 
 Finally, treat distribution shift as the default rather than a pathology. Retrain cadence is a design parameter, not an afterthought. A model validated on 2024 data facing a 2026 regime change is not overfitting, it is a different problem, and conflating the two sends you optimising regularization when you should be rebuilding the pipeline.
 
+**Worth sketching.** The embargo gap and the "up to t only" constraint are the two things candidates leave out, and a drawing makes their absence obvious.
+
+```mermaid
+flowchart LR
+    A["Train on 0 to t"] -->|"embargo equal to<br/>the label horizon"| B["Validate t to t plus h"]
+    B --> C["Roll the origin forward"]
+    C --> A
+    B --> D["Report per horizon,<br/>not averaged"]
+    D --> E["Beat naive persistence<br/>and seasonal naive first"]
+    F["Every aggregation uses<br/>data up to t only"] --> A
+```
+
 **Follow-ups:** Your walk-forward folds show wildly different scores. What does that tell you and what do you report to stakeholders? How do you build a training set when a key feature's values get restated 3 days after the fact?
 
 </details>
@@ -788,6 +1033,19 @@ Where positives/negatives come from is the whole game:
 - **SimCLR-style self-supervised vision**: positives are two augmentations of the same image.
 
 Failure modes worth naming: **false negatives** (in-batch "negatives" that are actually relevant) cap achievable quality on noisy data; small batches → easy negatives → mushy embeddings (memory banks/MoCo-style queues were built to fake bigger negative pools); and if you train with cosine+τ, you must serve with cosine (normalize before indexing).
+
+**Worth sketching.** Once the similarity matrix is on the board, batch size and hard negatives stop being separate topics: they are both just columns in that softmax.
+
+```mermaid
+flowchart LR
+    A["Batch of N pairs"] --> B["Encode queries"]
+    A --> C["Encode positives"]
+    B --> D["N by N similarity matrix,<br/>divided by tau"]
+    C --> D
+    E["Mined hard negatives<br/>from BM25 or a prior model"] --> D
+    D --> F["Softmax over each row:<br/>the diagonal is the correct class"]
+    F --> G["Cross-entropy, both directions"]
+```
 
 **Follow-ups:** Why do larger batches help contrastive training but matter less for standard supervised training? How do hard negatives change what the embedding space learns? How would you build the training set for a code-search embedder?
 
@@ -908,6 +1166,19 @@ Loss spikes are endemic to large-scale transformer training - occasional bad bat
 
 **The playbook when a spike hits**: check grad-norm and per-layer norm logs - a grad-norm spike *preceding* the loss spike implicates optimization; no grad spike suggests data. Inspect the offending batch (corrupt documents, pathological repetition - data issues are the most common culprit). Standard remediations, escalating: rely on clipping and let it recover; **rewind to the last good checkpoint and skip the offending data shard** (used in OPT and BLOOM-era runs, documented candidly in OPT's logbook); lower peak LR; add stabilisers (QK-norm, z-loss). Also rule out infrastructure: a flaky GPU producing silent NaNs looks exactly like an optimization problem - per-rank gradient-norm logging localises it.
 
+**Worth sketching.** The first branch is the whole playbook: whether the grad-norm moved before the loss did tells you if this is optimization, data, or hardware.
+
+```mermaid
+flowchart TD
+    A["Loss spike"] --> B{"Grad-norm spike<br/>before the loss spike?"}
+    B -->|"yes"| C["Optimization: lower peak LR,<br/>check how often clipping fires"]
+    B -->|"no"| D["Data: inspect the batch for<br/>corrupt docs or pathological repetition"]
+    B -->|"one rank only"| E["Infrastructure: flaky device<br/>emitting silent NaNs"]
+    D --> F["Rewind to the last good<br/>checkpoint, skip that shard"]
+    C --> G["Add stabilisers: QK-norm,<br/>z-loss, beta2 at 0.95"]
+    F --> G
+```
+
 **Follow-ups:** Why does bf16 remove the need for loss scaling - what's the actual bit-level difference? Why lower β₂ for LLMs? Clipping fires on 40% of steps - what do you change?
 
 </details>
@@ -925,6 +1196,20 @@ This is a synthesis question - the interviewer wants the imbalance, calibration,
 **Validation protocol.** Strictly **temporal splits** - train on months 1-9, validate on 10, test on 11-12 - because fraud drifts and adversaries adapt; random splits inflate results. **Entity-level grouping** so no card/account/device spans splits (group leakage otherwise lets the model recognise entities). Handle **label latency**: chargebacks take 30-90 days to arrive, so recent data has censored labels - evaluate on a window mature enough for labels to settle, and be explicit about it. Audit features for target leakage (anything downstream of a fraud decision, like "account_frozen"). Run **adversarial validation** to confirm train/test aren't trivially distinguishable for spurious reasons.
 
 **Monitoring.** Immediate: input-feature drift (PSI/KS vs reference), score-distribution drift, alert volume. Fast proxies: review-queue precision (human analysts label alerts daily - a live precision estimate). Delayed: recall against matured chargeback labels, reported with the built-in lag. Feedback-loop trap: you only get labels for what you *investigate*, so blocked/ignored transactions are unlabeled - mitigate with a small exploration budget (let a random ~0.1% sample through un-actioned, or use analyst deep-dives) to estimate uncensored recall. Retrain cadence triggered by drift alarms, not just calendar.
+
+**Worth sketching.** The exploration arrow bypassing the review queue is the detail that separates a real design from a textbook one: without it you never see uncensored recall.
+
+```mermaid
+flowchart LR
+    A["Temporal split:<br/>months 1-9, 10, 11-12"] --> B["Group by card,<br/>account and device"]
+    B --> C["Train scorer"]
+    C --> D["Calibrate on held-out data,<br/>after any reweighting"]
+    D --> E["Threshold on expected cost:<br/>block, review, or allow"]
+    E --> F["Review queue,<br/>500 alerts per day"]
+    F --> G["Analyst labels give<br/>precision daily"]
+    G --> H["Chargebacks at 30-90 days<br/>give recall, with the lag"]
+    E -->|"0.1% exploration sample<br/>passes un-actioned"| H
+```
 
 **Follow-ups:** How exactly does the selective-labels problem bias naive retraining? The ops team's capacity halves - what changes in your metric and threshold? How do you A/B test a new fraud model when the intervention itself changes the labels you observe?
 
@@ -947,6 +1232,19 @@ I split this into seven hypotheses and attack them in cost order, because most o
 Sequencing: experiment health, then skew, then decision layer, then the causal question, then power. Concretely, if online AUC on delayed labels is *also* 0.87 and the metric is still flat, the model is fine and the problem is causality or the action. That is the branch most candidates never reach.
 
 The senior signal here is being willing to land on "ML is not the lever for this problem" and say it out loud, with evidence, rather than shipping v2 of a model that was never the bottleneck.
+
+**Worth sketching.** Ordering the branches by cost is the signal here: you rule out plumbing before you touch the model, and the last box is where most candidates never arrive.
+
+```mermaid
+flowchart TD
+    A["0.87 offline,<br/>business metric flat"] --> B{"Sample ratio and exposure<br/>logging clean?"}
+    B -->|"no"| C["The experiment is broken,<br/>every number is fiction"]
+    B -->|"yes"| D{"Online score distribution<br/>matches offline?"}
+    D -->|"no"| E["Training-serving skew:<br/>replay logged vectors and diff"]
+    D -->|"yes"| F{"Does the decision layer<br/>act on the score?"}
+    F -->|"no"| G["Stale threshold, capacity cap,<br/>or a business rule overriding it"]
+    F -->|"yes"| H["Causal: you ranked risk,<br/>the business needs persuadability"]
+```
 
 **Follow-ups:** You find online AUC matches offline and the intervention is randomized. What is left, and how do you quantify it? How would you have caught the "predicting churn instead of persuadability" mistake before launch?
 
@@ -986,6 +1284,19 @@ When randomization is impossible: propensity weighting or matching, difference-i
 
 The framing to leave them with: incrementality is the metric. Campaigns that "target high-converters" routinely have near-zero incremental lift, and a holdout is the only way to know.
 
+**Worth sketching.** Fanning the top 5% into four groups shows why a better churn model cannot fix this: the ranking cannot separate the branches at all.
+
+```mermaid
+flowchart TD
+    A["Rank by P(churn)"] --> B["Top 5% is a mix"]
+    B --> C["Lost causes:<br/>leave regardless"]
+    B --> D["Sure things:<br/>stay regardless"]
+    B --> E["Sleeping dogs:<br/>the discount makes it worse"]
+    B --> F["Persuadables:<br/>the only ones worth paying"]
+    G["Randomly withhold the<br/>discount from a slice"] --> H["Fit uplift on that data,<br/>score with Qini not AUC"]
+    H --> F
+```
+
 **Follow-ups:** You have no budget for a randomized holdout. What is your next best option and what assumption are you buying? Why does an S-learner tend to underestimate treatment effects?
 
 </details>
@@ -1008,6 +1319,21 @@ PTQ versus QAT: PTQ takes hours with a calibration set. QAT costs a training run
 What I insist on: a per-technique eval on my golden set *plus* a tail regression check. Compression damages rare capabilities and long-context behaviour first, and aggregate benchmark averages hide exactly that. And measure p95 under realistic concurrency, not single-request latency.
 
 Often the best move is not compression at all: **route**. A small model handles the easy majority of traffic, escalate to the large one on an uncertainty signal. That usually beats degrading everything uniformly.
+
+**Worth sketching.** Leading with the bottleneck branch shows the interviewer you know where the time actually goes, rather than reaching for quantization by reflex.
+
+```mermaid
+flowchart TD
+    A["Measure p95 under<br/>realistic concurrency"] --> B{"Decode-bound or<br/>prefill-bound?"}
+    B -->|"decode: memory bandwidth"| C["Weight-only and KV cache<br/>quantization"]
+    B -->|"prefill: compute"| D["FP8 or lower-precision math"]
+    A --> E["Free first: continuous batching,<br/>paged KV, prefix cache,<br/>speculative decoding"]
+    C --> F{"Still above 400ms?"}
+    D --> F
+    E --> F
+    F -->|"yes"| G["Distil a student on your task,<br/>or route easy traffic to a small model"]
+    F -->|"no"| H["Stop. Run the tail<br/>regression eval"]
+```
 
 **Follow-ups:** Your 4-bit model matches on aggregate benchmarks but users complain. How do you find what broke? Why is speculative decoding lossless, and what determines whether it actually speeds you up?
 
@@ -1034,6 +1360,20 @@ Traps that separate people who have run this from people who have read about it:
 4. **Model coupling.** Labels acquired via one model family are biased toward that family's blind spots and may not transfer to your next architecture.
 
 The 2026 reframing matters more than any of the above. Use a strong LLM to pre-label all 10M cheaply, then spend human budget on three things: a rigorously adjudicated gold eval set, the items where model self-consistency or ensemble disagreement is high, and an audit sample to estimate the pre-label error rate with a confidence interval. That converts 20k human labels into 10M labels of measured quality. Human effort goes exactly where model labels are least trustworthy, which is the whole point of active learning anyway, just with a much better base learner.
+
+**Worth sketching.** Splitting the budget into three named buckets on the board makes the argument concrete: humans go where model labels are least trustworthy.
+
+```mermaid
+flowchart TD
+    A["10M unlabelled,<br/>20k label budget"] --> B["2k random: the eval set,<br/>kept iid and sacred"]
+    A --> C["Strong model pre-labels<br/>all 10M cheaply"]
+    C --> D["Audit sample: error rate<br/>with a confidence interval"]
+    C --> E["High ensemble disagreement<br/>or low self-consistency"]
+    E --> F["Spend remaining human<br/>budget here"]
+    B --> G["Did acquisition actually<br/>beat random?"]
+    F --> G
+    D --> G
+```
 
 **Follow-ups:** How do you estimate the true error rate of 10M model-generated labels from an audit sample, and how big does the sample need to be? Your uncertainty sampling keeps surfacing the same ambiguous case. What does that tell you about the task, not the model?
 

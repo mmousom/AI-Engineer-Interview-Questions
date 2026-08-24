@@ -2,6 +2,12 @@
 
 60 questions: 17 basic, 24 intermediate, 19 advanced.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. Why did transformers replace RNNs and LSTMs for language modeling?
@@ -15,6 +21,14 @@ The parallelism point is the economically decisive one. Next-token prediction wi
 Worth noting the honest tradeoffs: RNNs have O(1) state per step at inference, while transformers pay O(n²) attention compute and an O(n) KV cache that grows with context. That's why there's active work on state-space models (Mamba-style architectures) and hybrid designs - they revisit the recurrent idea with parallelizable training. But for training-time throughput and quality at scale, attention won, and everything at the frontier today is transformer-based or transformer-hybrid.
 
 A good answer also mentions that self-attention is permutation-invariant, so transformers need explicit positional information (RoPE etc.) - the sequential order RNNs got for free has to be injected.
+
+**Worth sketching.** Two rows on the board: it makes the gradient path length and the parallelism argument visible at the same time.
+
+```mermaid
+flowchart LR
+    R1["RNN: token 1"] --> R2["token 2"] --> R3["token n"] --> RL["loss<br/>gradient crosses n recurrent steps"]
+    X["Transformer: all n tokens at once"] --> ATT["self-attention, every pair<br/>path length 1"] --> XL["n loss terms from one forward pass"]
+```
 
 **Follow-ups:** What's the inference-time cost transformers pay that RNNs don't? Why does causal masking make training so sample-efficient per forward pass? What are state-space models trying to recover?
 
@@ -32,6 +46,21 @@ A decoder block takes hidden states of shape (n_tokens × d_model) and applies t
 So the division of labour is: **attention moves information between tokens; the MLP transforms information at each token** (it's where most parameters and, plausibly, most stored "knowledge" live). The residual stream acts as a shared workspace that each sublayer reads from and writes small updates into - a framing that explains why you can stack 100+ blocks: the identity path means each block only needs to make an incremental refinement.
 
 Placement of the norm matters: modern models are **pre-norm** (norm inside the residual branch), which keeps the residual path clean and training stable at depth; the 2017 original was post-norm. In a real model each attention sublayer also applies RoPE to Q and K, and the block repeats N times (e.g. 32 blocks for a 7-8B model, 80 for a 70B), followed by a final norm and the LM head projecting to vocabulary logits.
+
+**Worth sketching.** Draw the residual line straight across first, then hang the two sublayers off it: that ordering is the whole point of the block.
+
+```mermaid
+flowchart LR
+    X["residual stream in"] --> N1["RMSNorm"]
+    N1 --> A["masked self-attention<br/>moves info between tokens"]
+    A --> AD1["add"]
+    X --> AD1
+    AD1 --> N2["RMSNorm"]
+    N2 --> M["SwiGLU MLP<br/>transforms info at each token"]
+    M --> AD2["add"]
+    AD1 --> AD2
+    AD2 --> OUT["next block, x N"]
+```
 
 **Follow-ups:** Roughly what fraction of a block's parameters are in the MLP vs attention? Why do residual connections matter more as depth grows? What changes in this picture for an MoE model?
 
@@ -63,6 +92,22 @@ def attention(Q, K, V, causal=True):
 ```
 
 The crucial conceptual point: the weights are **computed from the data at runtime**, not fixed like convolution kernels. The same layer can route "pronoun → antecedent" in one sentence and "verb → subject" in another. Why separate K and V? Because what makes a token *findable* (key) and what it should *deliver* once found (value) are different roles - collapsing them forces one vector to serve both, which is measurably worse.
+
+**Worth sketching.** It keeps the three projections and the two matmuls straight, which is where people fumble under pressure.
+
+```mermaid
+flowchart LR
+    X["X, shape n x d_model"] --> Q["Q = X W_q"]
+    X --> K["K = X W_k"]
+    X --> V["V = X W_v"]
+    Q --> S["scores = Q K^T / sqrt(d_k)"]
+    K --> S
+    S --> M["causal mask, then row-wise softmax"]
+    M --> W["weights, shape n x n"]
+    W --> O["out = weights . V"]
+    V --> O
+    O --> P["W_o back to d_model"]
+```
 
 **Follow-ups:** Why divide by √d_k? What is the computational complexity of step 2 and what does that imply for long contexts? In a decoder generating token-by-token, which of Q, K, V get cached and why?
 
@@ -104,6 +149,18 @@ In production kernels (FlashAttention), the mask is never materialised as an n×
 
 Details worth volunteering: encoder models (BERT) deliberately omit the mask - they trade generation ability for bidirectional context. Prefix-LM setups mask causally only over the generated portion while allowing bidirectional attention over the prompt. And during batched inference you additionally need *padding* masks so tokens don't attend to padding - a distinct mask that beginners often conflate with the causal one.
 
+**Worth sketching.** It shows the mask lands before the softmax, so renormalisation is automatic rather than a second step you bolt on.
+
+```mermaid
+flowchart LR
+    S["raw scores, n x n"] --> D{"is key j after query i?"}
+    D -->|"yes, future"| NEG["set score to -inf"]
+    D -->|"no, past or self"| KEEP["keep score"]
+    NEG --> SM["row-wise softmax"]
+    KEEP --> SM
+    SM --> Z["future weights exactly 0,<br/>surviving weights renormalise themselves"]
+```
+
 **Follow-ups:** Why does the mask go before the softmax rather than after? What's a prefix LM and when is bidirectional prompt attention useful? How does FlashAttention exploit the causal structure for speed?
 
 </details>
@@ -120,6 +177,20 @@ Empirically, interpretability work has found heads with recognisable roles - pre
 
 Head count is a tuned hyperparameter: too few heads underfits the diversity of relations; too many makes each head's subspace too narrow. head_dim between 64 and 128 has been a stable sweet spot across model generations.
 
+**Worth sketching.** It makes clear you are partitioning one computation, not stacking h copies of it.
+
+```mermaid
+flowchart LR
+    X["x, d_model = 4096"] --> SP["split into 32 subspaces<br/>head_dim 128"]
+    SP --> H1["head 1: own Q/K/V,<br/>own softmax"]
+    SP --> H2["head 2"]
+    SP --> HN["head 32"]
+    H1 --> C["concat back to 4096"]
+    H2 --> C
+    HN --> C
+    C --> WO["W_o mixes the heads"]
+```
+
 **Follow-ups:** What is an induction head and why does it matter for in-context learning? If many heads are redundant, what architectural optimisations does that motivate? Does multi-head attention cost more FLOPs than single-head at equal d_model?
 
 </details>
@@ -135,6 +206,20 @@ Head count is a tuned hyperparameter: too few heads underfits the diversity of r
 **Encoder-decoder** (original transformer, T5, Whisper, many translation models): the encoder reads the input with bidirectional attention; the decoder generates autoregressively while cross-attending to encoder outputs. Strongest fit when there's a clear input→output transform with a fixed input: translation, speech-to-text, structured summarisation. The bidirectional encode of the source is a genuine advantage there. Drawbacks for general chat: the input/output split is awkward for multi-turn conversation, and you can't incrementally extend "the input" the way a decoder-only model just appends to context.
 
 A nuance worth adding: decoder-only models can emulate the encoder-decoder pattern - the prompt plays the role of the encoded input - and prefix-LM variants allow bidirectional attention over the prompt while generating causally. In practice the industry consolidated on decoder-only for generative workloads and encoder-only for embeddings/reranking, with encoder-decoder holding niches like ASR (Whisper) and translation.
+
+**Worth sketching.** Draw what attends to what rather than three labelled boxes: the attention pattern is the actual difference.
+
+```mermaid
+flowchart LR
+    IN["input tokens"] --> BI["bidirectional self-attention"]
+    BI --> REP["contextual vectors,<br/>no generation path"]
+    IN2["prompt plus tokens so far"] --> CA["causal self-attention"]
+    CA --> NXT["next token, appended"]
+    NXT --> IN2
+    SRC["source sequence"] --> ENC["bidirectional encoder"]
+    ENC --> XA["decoder cross-attends<br/>while generating causally"]
+    XA --> TGT["target sequence"]
+```
 
 **Follow-ups:** Why do embedding models still use bidirectional attention? What's a prefix LM? If you were building a translation system today, would you pick encoder-decoder or a decoder-only LLM, and on what criteria?
 
@@ -189,6 +274,19 @@ Counting itself is the second failure: transformers perform a fixed number of la
 
 The general lesson interviewers want: **this is a tokenization artifact, not evidence about intelligence**. The same root cause explains poor performance on rhyming and wordplay, string reversal, base64-ish character manipulation, and off-by-one behaviours in character-precise editing. Practical implication for engineers: don't build character-level string operations on raw LLM output - do them in code, and use the LLM for the parts it's actually good at.
 
+**Worth sketching.** It puts a finger on the exact step where characters stop existing, which is also why spelling it out first works.
+
+```mermaid
+flowchart LR
+    W["word: strawberry"] --> T["tokenizer"]
+    T --> ID["token ids, characters gone"]
+    ID --> E["embedding vectors"]
+    E --> D{"asked to count the r's"}
+    D -->|"answer directly"| G["recall spelling from memory<br/>and count in fixed depth"]
+    D -->|"spell it out first"| S["s-t-r-a-w-b-e-r-r-y<br/>now one token per letter"]
+    S --> C["count over tokens it can see"]
+```
+
 **Follow-ups:** Why does asking the model to spell the word first fix the count? What other task categories fail for the same root cause? How would a byte-level model differ here?
 
 </details>
@@ -227,6 +325,21 @@ One more useful framing: temperature trades off exploitation of the model's conf
 
 The key insight behind all truncation sampling: the model's probability mass is well-calibrated at the head of the distribution and unreliable at the tail - a long generation will eventually sample a tail token, and one bad token can derail everything after it (errors compound autoregressively). Truncation cuts the tail; temperature shapes what remains. In practice these compose: temperature + top-p (+ optionally top-k as a hard cap) is the standard stack, with greedy/T≈0 for anything with a right answer.
 
+**Worth sketching.** It fixes the order of operations, which is what makes the top-p versus min-p difference concrete.
+
+```mermaid
+flowchart LR
+    Z["logits over vocab"] --> GD["greedy: argmax, skip the rest"]
+    Z --> T["temperature: z / T"]
+    T --> SM["softmax"]
+    SM --> K["top-k: fixed k,<br/>ignores distribution shape"]
+    SM --> P["top-p: smallest set with<br/>cumulative mass p, adapts per step"]
+    SM --> MP["min-p: keep p above min_p x p_max,<br/>anchored to the top token"]
+    K --> R["renormalise, then sample"]
+    P --> R
+    MP --> R
+```
+
 **Follow-ups:** Why does greedy decoding loop, mechanistically? When does top-p fail and how does min-p fix it? Why is sampled text at T=1 often *worse* than the model's "true" distribution would suggest?
 
 </details>
@@ -242,6 +355,18 @@ Without the cache you'd re-run the full forward pass over the whole prefix for e
 This creates the two-phase structure every serving stack is built around: **prefill** (process the whole prompt in parallel - compute-bound, populates the cache) and **decode** (one token at a time - memory-bandwidth-bound, because each step must read the entire cache from GPU memory while doing relatively few FLOPs). Time-to-first-token is prefill; inter-token latency is decode.
 
 The cost is memory: per token you store 2 (K and V) × n_layers × n_kv_heads × head_dim elements. For a 70B-class model with GQA (80 layers, 8 KV heads, head_dim 128, fp16) that's ~320 KB per token - ~40 GB for one 128k-token sequence. That memory pressure is why GQA/MQA exist (fewer KV heads), why vLLM's PagedAttention manages cache in non-contiguous blocks, why prefix/prompt caching shares cache across requests, and why cache quantization (fp8/int8 KV) is common.
+
+**Worth sketching.** The loop back into the cache is the point: draw it and the linear-versus-quadratic argument makes itself.
+
+```mermaid
+flowchart LR
+    P["prefill: whole prompt in parallel<br/>compute-bound, sets TTFT"] --> C["KV cache: K and V for<br/>every token, every layer"]
+    C --> D["decode step: project Q, K, V<br/>for one new token"]
+    D --> A["attend over n cached entries,<br/>streaming the cache from HBM"]
+    A --> AP["append this token's K and V"]
+    AP --> D
+    AP --> O["emit token, cache grows by one"]
+```
 
 **Follow-ups:** Why is decode memory-bandwidth-bound rather than compute-bound? What is prefix caching and when does it save money? Why can't you cache the queries too?
 
@@ -274,6 +399,19 @@ Why it won: it consistently gives lower loss at matched parameters and FLOPs. Th
 A useful mental model from interpretability: treat W_gate/W_up rows as pattern detectors and W_down columns as the content those patterns write back into the residual stream, so the FFN behaves like a key-value memory.
 
 The misconception worth killing is that the FFN is a boring MLP tacked onto the interesting part. It holds the bulk of the parameters, dominates FLOPs at short and moderate context, and it is exactly the component Mixture-of-Experts replaces, because that is where the capacity is.
+
+**Worth sketching.** Three matrices meeting at a multiply: it shows immediately why the hidden dimension shrinks to keep the parameter count fixed.
+
+```mermaid
+flowchart LR
+    X["x, d_model"] --> G["x W_gate"]
+    X --> U["x W_up"]
+    G --> S["SiLU"]
+    S --> M["elementwise multiply:<br/>the gate can switch a unit off"]
+    U --> M
+    M --> D["W_down, back to d_model<br/>d_ff ~ 8/3 x d_model, not 4x"]
+    D --> R["add into residual stream"]
+```
 
 **Follow-ups:** Where does the FFN stop dominating FLOPs and attention take over? Why does MoE swap out the FFN rather than attention?
 
@@ -311,6 +449,18 @@ What a strong answer adds:
 - Acceptance rate is everything, and it depends on distribution match, not draft quality in the abstract. The best drafts are distilled from the specific target model, so the KL between them is small. A generically good 1B model drafting for an unrelated 70B can accept badly.
 - Variants avoid the second model entirely: Medusa and EAGLE add draft heads on the target's own trunk, n-gram or prompt-lookup drafting works well for copy-heavy work like RAG and code edits, and DeepSeek-V3 reuses its multi-token-prediction module as the draft.
 
+**Worth sketching.** The branch at the acceptance test is what proves you understand this is rejection sampling, not an approximation.
+
+```mermaid
+flowchart LR
+    DR["draft model proposes k tokens"] --> V["target scores all k+1 positions<br/>in one forward pass"]
+    V --> C{"accept token with<br/>prob min(1, p_target / p_draft)"}
+    C -->|"accepted"| K["keep it, test the next one"]
+    C -->|"first rejection"| RS["resample from corrected residual,<br/>discard the remaining drafts"]
+    K --> DR
+    RS --> DR
+```
+
 **Follow-ups:** How would you measure whether speculative decoding is actually helping in a live serving deployment? What acceptance rate do you need for it to break even?
 
 </details>
@@ -331,6 +481,19 @@ Use fine-tuning when the task is stable and high volume so amortised token cost 
 
 One thing worth flagging because interviewers like it: with modern instruction-tuned models, examples mostly are not teaching a new task. Min et al. showed that on classification, replacing demonstration labels with random wrong ones barely hurts. What the demonstrations convey is the label space, the input distribution and the output format, not the mapping. So the practical implication is that example selection and diversity matter far more than example count, and 30 near-identical examples are mostly wasted context.
 
+**Worth sketching.** A decision tree keeps this from turning into a generic list of pros and cons.
+
+```mermaid
+flowchart TD
+    S["new task"] --> D1{"can you describe it in a prompt?"}
+    D1 -->|"no: tone, house style, odd format"| FT["fine-tune"]
+    D1 -->|"yes"| D2{"stable and high volume?"}
+    D2 -->|"no, still iterating"| ICL["in-context: instruction plus<br/>a few diverse, format-correct examples"]
+    D2 -->|"yes, or latency and size limits bite"| D3{"thousands of good examples?"}
+    D3 -->|"yes"| FT
+    D3 -->|"no"| ICL
+```
+
 **Follow-ups:** If wrong labels barely hurt, what does that imply about how you should choose few-shot examples? When have you seen in-context learning genuinely fail where fine-tuning succeeded?
 
 </details>
@@ -348,6 +511,20 @@ Why it matters: with post-norm, the gradient from the loss to early layers must 
 The honest nuance: post-norm, *when you can train it*, sometimes achieves slightly better final quality - pre-norm's identity path means later layers can behave more like an ensemble of shallow paths, arguably wasting some depth. This motivated hybrids (e.g. "peri-norm"/double-norm arrangements, or Gemma-style normalizing both the branch input and output), but plain pre-norm remains the default.
 
 **RMSNorm** vs LayerNorm: LayerNorm subtracts the mean, divides by standard deviation, then applies learned gain and bias. RMSNorm drops mean-centring and the bias - just divide by the root-mean-square of the vector and apply a learned gain: x / RMS(x) · g. Ablations (from the RMSNorm paper onward, confirmed at scale by Llama-family models) show the mean-centring isn't needed; RMSNorm is cheaper (fewer reductions, fewer params, one fewer memory-bound op) and equally stable. At thousands of norm invocations per forward pass, the savings are real.
+
+**Worth sketching.** Draw both residual paths and the difference is immediate: one has a norm sitting on the trunk.
+
+```mermaid
+flowchart LR
+    A["post-norm: x"] --> B["sublayer"]
+    B --> C["add"]
+    A --> C
+    C --> N["norm on the trunk<br/>every gradient passes through it"]
+    P["pre-norm: x"] --> Q1["norm"]
+    Q1 --> R["sublayer"]
+    R --> S["add"]
+    P -->|"identity path, untouched"| S
+```
 
 **Follow-ups:** Why does warmup interact with post-norm? What does normalizing do to the loss landscape geometry? Where else in modern architectures do norms appear besides the two block positions (QK-norm, final norm)?
 
@@ -377,6 +554,19 @@ def bpe_step(corpus):                     # corpus: list of (symbol_tuple, freq)
 ```
 
 Practical details that signal real understanding: real tokenizers apply a **pre-tokenization** regex first (splitting on whitespace/category boundaries, so merges don't cross word boundaries - GPT-2's regex famously special-cases contractions like `'s`), and they handle leading spaces as part of tokens (`" the"` and `"the"` are different tokens). Frequency-based merging means the vocabulary mirrors the training corpus distribution - which is exactly why tokenizers trained on English-heavy data fragment other languages. Note also the contrast: **WordPiece** picks the merge maximising corpus likelihood rather than raw frequency, and **unigram-LM** (SentencePiece's other algorithm) works top-down - start with a large candidate vocab and prune tokens whose removal least hurts likelihood.
+
+**Worth sketching.** The loop and its exit condition are the algorithm; everything else is bookkeeping.
+
+```mermaid
+flowchart LR
+    I["vocab = 256 byte values"] --> PT["pre-tokenize by regex<br/>merges cannot cross word boundaries"]
+    PT --> CNT["count all adjacent symbol pairs"]
+    CNT --> MG["merge the most frequent pair,<br/>append the rule to the list"]
+    MG --> D{"target vocab size reached?"}
+    D -->|"no"| CNT
+    D -->|"yes"| OUT["ordered merge list is the tokenizer"]
+    OUT --> ENC["encoding replays the merges greedily"]
+```
 
 **Follow-ups:** Why does pre-tokenization matter - what would go wrong without word-boundary constraints? Why do `"the"` and `" the"` need to be separate tokens? How does unigram-LM tokenization differ conceptually from BPE?
 
@@ -454,6 +644,19 @@ The n×n score matrix means attention FLOPs scale quadratically with sequence le
 
 Consequences that follow: (1) long-context pricing - some providers price long-context requests higher because prefill compute and cache memory both balloon; (2) architectural responses - GQA/MQA/MLA shrink the cache, sliding-window attention (Mistral-style) bounds it, hybrid SSM-attention models attack both; (3) FlashAttention fixes attention's *memory* footprint (no materialised n² matrix) and IO but not the FLOP count - prefill is still quadratic; (4) product implications - "just stuff everything in context" has a real quadratic cost floor, which keeps RAG and context curation economically relevant even as windows grow.
 
+**Worth sketching.** Splitting the two phases before you talk shows the interviewer you know where the bottleneck actually sits.
+
+```mermaid
+flowchart TD
+    R["request"] --> PF["prefill: n prompt tokens at once"]
+    PF --> PC["attention FLOPs grow as n^2<br/>compute-bound, this is TTFT"]
+    R --> DC["decode: one token per step"]
+    DC --> DM["O(n) per step, but the real cost is<br/>streaming a cache that grows with n"]
+    DM --> DB["memory-bandwidth-bound, this is ITL"]
+    PC --> F1["answers: chunked prefill, FlashAttention"]
+    DB --> F2["answers: GQA, MLA, sliding window,<br/>KV quantization"]
+```
+
 **Follow-ups:** Why is decode memory-bandwidth-bound - walk me through the arithmetic intensity? What does sliding-window attention give up? Why doesn't FlashAttention change the asymptotic FLOP complexity?
 
 </details>
@@ -473,6 +676,18 @@ Three mechanisms:
 Results: memory footprint for attention drops from O(n²) to O(n), wall-clock speedups of ~2-4× on typical shapes, and long-context training/inference becomes practical. FlashAttention-2/3 refine parallelization and exploit newer hardware (Hopper async execution, fp8).
 
 What it does **not** change: the FLOP count is still O(n²) - prefill remains quadratic in compute; it's not sparse, linear, or approximate attention. And it doesn't shrink the KV cache - those are orthogonal problems solved by GQA/MLA/quantization. Common interview trap: calling FlashAttention an approximation. It's bit-for-bit the same attention (up to floating-point reordering), which is exactly why adoption was universal - no quality tradeoff to litigate.
+
+**Worth sketching.** Contrasting the memory traffic in both versions makes it obvious the maths never changed.
+
+```mermaid
+flowchart LR
+    N["naive: write n x n scores to HBM"] --> RD["read back for softmax, write probs,<br/>read again for the V multiply"]
+    RD --> B["bottleneck is HBM traffic, not FLOPs"]
+    F["FlashAttention: tile Q, K, V into SRAM"] --> ON["online softmax carries a running<br/>max and sum, rescaling as blocks arrive"]
+    ON --> FUSE["scores, softmax and V multiply fused,<br/>no n x n matrix ever materialised"]
+    FUSE --> BW["backward recomputes tiles from row stats"]
+    BW --> SAME["identical numbers, O(n) memory,<br/>still O(n^2) FLOPs"]
+```
 
 **Follow-ups:** Walk me through the online softmax rescaling. Why is recomputation faster than storing the matrix? How does FlashAttention interact with causal masking?
 
@@ -511,6 +726,19 @@ Why it won (Llama, Qwen, Mistral, most modern open models - and it's the assumpt
 
 Limitation: vanilla RoPE still degrades sharply past trained length - unseen angle ranges are out-of-distribution - which is exactly what the extension methods address.
 
+**Worth sketching.** The two rotations meeting at one dot product is the whole proof sketch in a picture.
+
+```mermaid
+flowchart LR
+    QM["q at position m"] --> RM["rotate each dim pair by m x theta_i"]
+    KN["k at position n"] --> RN["rotate each dim pair by n x theta_i"]
+    RM --> DOT["dot product"]
+    RN --> DOT
+    DOT --> REL["angle difference is (m - n) x theta_i:<br/>score depends only on the offset"]
+    V["v"] --> UNT["untouched, so the output<br/>carries no positional contamination"]
+    REL --> EXT["extension becomes frequency surgery:<br/>rescale theta or rescale positions"]
+```
+
 **Follow-ups:** Prove that the score depends only on m−n for a single 2D pair. Why is RoPE applied to Q and K but not V? How do position interpolation and YaRN manipulate RoPE's frequencies?
 
 </details>
@@ -545,6 +773,20 @@ The failure you're fixing: RoPE encodes position as rotation angles, and positio
 
 Also mention: production long-context models typically combine such scaling with dedicated **long-context mid-training** (continued pretraining on genuinely long documents) - frequency surgery makes long positions representable; training on long-range dependencies makes them *usable*. And verify with retrieval evals (needle-in-a-haystack and, better, multi-fact reasoning benchmarks like RULER-style suites) - advertised length ≠ usable length.
 
+**Worth sketching.** Banding the frequencies is what separates a YaRN answer from a plain position-interpolation answer.
+
+```mermaid
+flowchart TD
+    P["position beyond the trained 8k"] --> B{"which RoPE frequency band?"}
+    B -->|"high freq, many wavelengths already seen"| HI["leave untouched,<br/>local resolution preserved"]
+    B -->|"middle band"| MID["ramp smoothly between the two"]
+    B -->|"low freq, long wavelength"| LO["interpolate fully,<br/>absolute angle stays in range"]
+    HI --> AT["plus attention temperature scaling<br/>for the entropy shift"]
+    MID --> AT
+    LO --> AT
+    AT --> FT["short fine-tune on genuinely long documents"]
+```
+
 **Follow-ups:** Why do high-frequency RoPE dims need no interpolation? Why does long-context extension usually still require some fine-tuning on long documents? How would you verify usable context length before shipping?
 
 </details>
@@ -562,6 +804,16 @@ They exist because of KV cache memory. In standard multi-head attention (MHA), e
 Concrete impact: a 70B-class model at fp16 with 80 layers and head_dim 128 stores ~2.6 MB/token with 64 KV heads versus ~320 KB/token with 8 - the difference between fitting ~4 and ~30+ long sequences in the same memory.
 
 The natural follow-on is **MLA** (multi-head latent attention, DeepSeek): compress K/V into a shared low-rank latent vector per token and reconstruct per-head K/V from it - cutting cache further while *increasing* effective head diversity versus GQA. Worth mentioning to show you know where this design line went.
+
+**Worth sketching.** Query heads on one side, KV heads on the other: the sharing ratio is the entire design space.
+
+```mermaid
+flowchart TD
+    Q1["MHA: 32 query heads"] --> KV1["32 KV heads<br/>largest cache, best quality"]
+    Q2["MQA: 32 query heads"] --> KV2["1 shared KV head<br/>32x smaller, measurable quality cost"]
+    Q3["GQA: 32 query heads in 8 groups"] --> KV3["8 KV heads<br/>8x smaller, quality near MHA"]
+    KV3 --> MLA["MLA: cache one latent per token,<br/>rebuild per-head K and V from it"]
+```
 
 **Follow-ups:** Why is decode throughput bounded by memory bandwidth, and how does GQA change the arithmetic? How does the GQA uptraining recipe work? What does MLA do differently?
 
@@ -590,6 +842,18 @@ So a single 128k-context conversation consumes ~40+ GB of GPU memory *beyond* th
 Engineering consequences to draw out: (1) batch capacity - cache memory, not weights, caps concurrent users, so cache size directly sets cost per request; (2) **PagedAttention** (vLLM) exists because naively pre-allocating max-length contiguous cache wastes most of it - paging allocates on demand in blocks, like virtual memory; (3) **KV quantization** to fp8/int8 halves or quarters this again with modest quality cost; (4) **prefix caching** shares the cache of common prompt prefixes (system prompts, few-shot examples) across requests - huge savings for agentic workloads that repeatedly re-send growing conversations; (5) speculative decoding, beam search, and parallel sampling all multiply cache pressure.
 
 Sanity-check habit: memorise the formula, not model numbers - interviewers vary the architecture and want to watch you compute.
+
+**Worth sketching.** Writing the multiply chain out means you can recompute it live when the interviewer changes the architecture on you.
+
+```mermaid
+flowchart LR
+    T["one token"] --> L["x 80 layers"]
+    L --> H["x 8 KV heads (not query heads)"]
+    H --> D["x 128 head_dim"]
+    D --> KV["x 2, one each for K and V"]
+    KV --> B["x 2 bytes, fp16"]
+    B --> R["320 KB per token<br/>~42 GB for one 128k sequence"]
+```
 
 **Follow-ups:** How does PagedAttention reduce waste, and what problem does fragmentation cause? On an 8×80 GB node serving this model, how many concurrent 32k-token sequences fit after the weights? How does sliding-window attention change the formula?
 
@@ -650,6 +914,17 @@ Caveats a strong candidate raises: RLHF-tuned models are notoriously **miscalibr
 
 Framing that lands well: pretraining ≈ building the engine; mid-training ≈ upgrading components; SFT ≈ teaching it to drive on roads; RL ≈ coaching it against outcomes. Each stage is orders of magnitude cheaper than the previous, but the later stages disproportionately determine perceived quality.
 
+**Worth sketching.** Labelling the edges with what each stage adds stops the four stages all sounding like the same stage.
+
+```mermaid
+flowchart LR
+    PT["pretraining: trillions of tokens,<br/>next-token prediction"] -->|"~99% of compute"| BM["base model: completes text,<br/>does not converse"]
+    BM -->|"curated data, long documents"| MT["mid-training: domain mix,<br/>context extension, annealing"]
+    MT -->|"10^4 to 10^6 pairs"| SFT["SFT: chat format, instruction following,<br/>tool syntax, refusal style"]
+    SFT -->|"preferences or verifiers"| RL["RL: RLHF and DPO for style,<br/>RLVR and GRPO for checkable outcomes"]
+    RL --> SHIP["shipped model"]
+```
+
 **Follow-ups:** Why does SFT on new facts encourage hallucination? What does the KL constraint in RLHF prevent? Why did verifiable rewards unlock reasoning gains that preference-based RLHF didn't?
 
 </details>
@@ -669,6 +944,18 @@ Be precise about what that does not do. It does not extend effective context. To
 Architectural responses: train with a dedicated learnable sink token so the behaviour is explicit rather than emergent; or give the softmax an escape valve, either an off-by-one formulation with an extra zero logit in the denominator or a learned per-head bias, so heads do not need to hijack a real token to no-op.
 
 The connection interviewers love: sink positions carry enormous activation outliers, since the model pushes huge values through specific residual dimensions to win that competition. That is a large part of why naive activation quantization falls over, and it ties this straight into serving.
+
+**Worth sketching.** The branch at eviction is the memorable part: one token rolls off and every attention distribution shifts.
+
+```mermaid
+flowchart TD
+    S["softmax must sum to 1"] --> NN["a head with nothing to fetch<br/>still has to put its mass somewhere"]
+    NN --> T0["token 0: visible to every position,<br/>value vector contributes ~ nothing"]
+    T0 --> EV{"sliding window rolls past token 0?"}
+    EV -->|"evicted"| BOOM["mass lands on real tokens instead,<br/>perplexity explodes"]
+    EV -->|"first ~4 tokens pinned"| OK["stable over millions of streamed tokens"]
+    OK --> NOTE["but no extra recall:<br/>evicted middle tokens are still gone"]
+```
 
 **Follow-ups:** How does a learned softmax bias change the quantization story? Would you expect attention sinks in an encoder-only model?
 
@@ -693,6 +980,18 @@ What you give up and what to watch:
 
 Compared to a learned sparse pattern, sliding windows hard-code the assumption that relevance is local. That is a good prior for prose and a poor one for code with distant definitions, which is part of why the learned-sparsity direction (an indexer that scores and selects prior positions) is being explored.
 
+**Worth sketching.** Drawing the 5:1 block shows exactly which layers still carry a cache that grows with context.
+
+```mermaid
+flowchart LR
+    IN["tokens"] --> L1["local layer, window 1024<br/>cache capped at w"]
+    L1 --> L2["five local layers in a row"]
+    L2 --> G["one full-attention layer<br/>cache grows with n"]
+    G --> OUT["repeat the block"]
+    L2 --> RF["receptive field compounds to ~ L x w,<br/>but multi-hop propagation is lossy"]
+    G --> EX["exact long-range retrieval<br/>can only happen here"]
+```
+
 **Follow-ups:** How would you choose the local-to-global ratio for a code model versus a chat model? What does sliding-window attention do to prefix caching in a multi-turn agent?
 
 </details>
@@ -710,6 +1009,19 @@ Why it is not just "GQA with extra steps": the up-projection matrices are static
 The complication is RoPE, and this is the detail that separates people who have read the paper from people who have read a summary. RoPE applies a position-dependent rotation, and you cannot absorb a position-dependent rotation into a static up-projection, so the absorption trick breaks. DeepSeek's answer is decoupled RoPE: split the head dimension into a compressed no-RoPE part and a small separate RoPE-carrying part that is cached uncompressed and shared across heads.
 
 When would I pick it? Only when KV memory at long context is genuinely my binding constraint and I control the serving stack. MLA is materially harder to implement and to shard under tensor parallelism, kernel support is thinner, and the reported quality advantage shows up mainly at large scale. Below roughly 100B most teams still choose GQA, and that is a defensible engineering call: GQA is simple, supported everywhere, and good enough. Complexity you cannot serve is negative value.
+
+**Worth sketching.** The separate RoPE-carrying path is the detail that shows you read the paper rather than a summary of it.
+
+```mermaid
+flowchart LR
+    H["hidden state"] --> C["down-project to a small latent"]
+    C --> CACHE["cache the latent only"]
+    CACHE --> UP["up-projections rebuild per-head K and V"]
+    UP --> ABS["static, so absorb them into W_q and W_o:<br/>score against the latent directly"]
+    H --> RP["small RoPE-carrying slice, cached<br/>uncompressed and shared across heads"]
+    ABS --> SC["attention scores"]
+    RP --> SC
+```
 
 **Follow-ups:** How does MLA interact with tensor parallelism compared to GQA? Would you expect MLA or KV cache quantization to be the better first move on an existing GQA model?
 
@@ -772,6 +1084,19 @@ Design details that matter: DeepSeek's version is sequential, each module condit
 
 Tradeoffs: extra parameters and memory during training, another loss-weighting hyperparameter to tune, and a benefit that is scale-dependent enough that you need your own ablation rather than a citation. And I would be honest that the "it learns to plan" story is contested; some of the improvement may just be a denser training signal acting as regularisation. The speculative-decoding payoff, unlike the planning claim, is unambiguous and easy to measure.
 
+**Worth sketching.** One trunk feeding several heads makes the free-draft-model claim self-evident.
+
+```mermaid
+flowchart LR
+    TR["shared trunk, position t"] --> H1["head: predict t+1"]
+    TR --> H2["module: predict t+2,<br/>conditioned on t+1"]
+    H2 --> H3["module: predict t+3"]
+    H1 --> LOSS["auxiliary losses, training only"]
+    H2 --> LOSS
+    H3 --> LOSS
+    H2 --> SD["at inference: a draft that shares the trunk<br/>and is distribution-matched by construction"]
+```
+
 **Follow-ups:** Why does an MTP draft head achieve higher acceptance than a separately trained 1B draft model? How would you weight the auxiliary losses across the t+2, t+3 heads?
 
 </details>
@@ -789,6 +1114,19 @@ The catch is information-theoretic and no amount of engineering fixes it. A fixe
 Hence hybrids, which is where the field actually landed: keep a small fraction of full-attention layers, roughly 1 in 4 to 1 in 8 in shipped models like Jamba, Zamba, Nemotron-H, Qwen3-Next and Kimi Linear, for exact retrieval, and make everything else linear or SSM. You get near-flat memory growth in context length and much better long-context throughput at close to transformer quality. The structure mirrors hybrid local/global attention, and for the same reason: a few exact layers plus many cheap ones.
 
 Practical caveats in 2026: kernel and serving support is thinner than for attention; prefix caching semantics differ, because you are caching a recurrent state that is not sliceable or reusable the way a KV cache is, which matters a lot for agent workloads; and there is no public, training-data-matched head-to-head comparison, so architecture choice remains partly conviction plus your own ablations.
+
+**Worth sketching.** Put the fixed state and the growing cache side by side and the hybrid draws itself as the obvious consequence.
+
+```mermaid
+flowchart LR
+    A["SSM layer: fixed-size recurrent state"] --> B["O(1) per token, nothing grows with n"]
+    A --> C["must decide what to keep at write time,<br/>before it knows the question"]
+    D["attention layer: KV cache"] --> E["lossless growing record,<br/>can quote a string from 100k back"]
+    D --> F["memory grows linearly with n"]
+    C --> HY["hybrid: 1 attention layer in 4 to 8"]
+    E --> HY
+    HY --> R["near-flat memory growth,<br/>exact retrieval preserved"]
+```
 
 **Follow-ups:** Why does prefix caching get harder with a recurrent state than with a KV cache? For an agent doing long tool-use trajectories, would you take a hybrid or a pure transformer?
 
@@ -815,6 +1153,18 @@ What I do:
 - Do not plan around reusing them. Thinking is regenerated per call, is not cached across turns, and providers commonly strip or summarise the traces, so building logic that inspects reasoning content is building on sand.
 
 The answer that fails this question is "set it high for quality". That is not a tradeoff, that is a bill.
+
+**Worth sketching.** It reframes the answer as routing and calibration rather than picking a number and defending it.
+
+```mermaid
+flowchart TD
+    R["incoming request"] --> CL{"cheap classifier: does this earn thinking?"}
+    CL -->|"no: extraction, classification, formatting"| OFF["thinking off, fast path"]
+    CL -->|"yes: multi-step, verifiable"| HI["high effort budget"]
+    HI --> EV["sweep the budget on a task eval,<br/>plot accuracy against p95 latency"]
+    EV --> KNEE["ship the knee, not the maximum"]
+    KNEE --> W["watch for overthinking, and for hard caps<br/>truncating mid-derivation"]
+```
 
 **Follow-ups:** How would you build the router that decides which requests get high effort? What would you monitor in production to detect that your chosen budget has drifted out of calibration?
 
@@ -908,6 +1258,20 @@ Why it wins: scaling laws reward parameters, but dense parameter growth raises p
 
 The costs (previewing the follow-up question): routing is a discrete, load-balancing-sensitive operation that complicates training; and at inference **all experts must be resident in memory** - you pay memory for total params while only computing with active ones, which shapes where MoE makes deployment sense (large batched serving, expert-parallel clusters) and where it doesn't (single consumer GPU).
 
+**Worth sketching.** Draw the idle experts too: that is where the memory-versus-FLOPs distinction lives.
+
+```mermaid
+flowchart LR
+    T["one token, one layer"] --> R["router: linear layer scores E experts"]
+    R --> TK["take top-k, softmax the gates"]
+    TK --> E1["expert 3 MLP"]
+    TK --> E2["expert 7 MLP"]
+    E1 --> S["sum, weighted by gate value"]
+    E2 --> S
+    S --> RES["back into the residual stream"]
+    R -.-> IDLE["other experts skipped this token<br/>but still resident in memory"]
+```
+
 **Follow-ups:** Why route per-token rather than per-sequence? What do experts actually specialise in, empirically? Is a 47B-total/13B-active MoE comparable to a 13B dense model or a 47B dense model - on what axis?
 
 </details>
@@ -924,6 +1288,18 @@ The costs (previewing the follow-up question): routing is a discrete, load-balan
 - **Systems coupling**: experts are sharded across devices (expert parallelism), so token routing becomes all-to-all network communication; load imbalance is now also a *hardware* stall problem. **Capacity factors** cap tokens per expert; overflow tokens get dropped (silently skipping computation) - a quality/throughput knob dense models don't have. Fine-tuning MoEs is also touchier (routers can destabilise on narrow distributions).
 
 **The inference memory caveat**: sparsity saves FLOPs, not memory. Every expert must be loaded and resident, because any token may route anywhere - a ~47B-total/13B-active model needs ~94 GB in fp16, the memory of a 47B dense model with the latency of ~13B. Consequences: MoE suits high-throughput batched serving on memory-rich, fast-interconnect clusters (where large batches keep all experts busy and per-token bandwidth for weights is amortised); it's a poor fit for single-GPU or on-device deployment, where a dense model of equal *quality* often deploys better. At small batch sizes the advantage narrows further - you stream lots of weights for few tokens.
+
+**Worth sketching.** Drawing the feedback loop makes the fix and the cost of the fix land together.
+
+```mermaid
+flowchart LR
+    A["expert happens to be favoured early"] --> B["receives more tokens"]
+    B --> C["trains faster, gets better"]
+    C --> A
+    C --> D["remaining experts starve,<br/>become dead capacity"]
+    D --> F["fix: auxiliary load-balancing loss,<br/>or bias-adjusted balancing"]
+    F --> G["cost: the balancing term fights the<br/>router's quality-driven preference"]
+```
 
 **Follow-ups:** Why does the load-balancing loss trade quality for stability? What does expert parallelism do to inference latency tails? When would you recommend dense over MoE despite MoE's training-compute win?
 
@@ -1024,6 +1400,19 @@ Times 32 blocks: ~6.5B. Plus **embeddings/LM head**: vocab × d = 32000 × 4096 
 
 Why this budget matters practically: (1) it explains why **MoE targets the MLP** - that's where the parameters are, so that's where conditional compute pays; (2) LoRA placement discussions and quantization sensitivity analyses are really conversations about this map; (3) interpretability's working hypothesis that MLPs store knowledge while attention routes it aligns with where the capacity sits; (4) at decode time the whole budget becomes a *bandwidth* budget - every parameter is read per token, so params ≈ bytes moved, which is why small-batch decode speed tracks model size in GB, not FLOPs.
 
+**Worth sketching.** A budget drawn as a tree is far easier to defend than a recited list of numbers.
+
+```mermaid
+flowchart TD
+    B["one decoder block, d_model 4096"] --> AT["attention: 4 d^2 ~ 67M params<br/>(~2.5 d^2 with GQA)"]
+    B --> MLP["SwiGLU MLP: 3 x d x d_ff ~ 135M<br/>roughly two thirds of the block"]
+    B --> NM["norms: ~2d each, negligible"]
+    AT --> X32["x 32 blocks = ~6.5B"]
+    MLP --> X32
+    X32 --> EMB["plus vocab x d for embedding and head:<br/>linear in d, so it dominates small models"]
+    EMB --> FL["FLOPs: 2N per token, until attention's<br/>n x d term overtakes at long context"]
+```
+
 **Follow-ups:** Derive the 6ND training-FLOP estimate. At what context length does attention compute overtake MLP compute for this architecture? How does GQA change the parameter and bandwidth budgets differently?
 
 </details>
@@ -1066,6 +1455,19 @@ What actually breaks:
 - Verifier gaming: passing tests without solving the problem, exploiting the checker, finding answer leakage.
 - The elicitation question. Pass@k analyses suggest RLVR sharpens what the base model can already sometimes do more than it adds new capability. Practically: base quality caps your ceiling, and no RL budget rescues a weak base.
 - Transfer beyond verifiable domains is the live open question.
+
+**Worth sketching.** The loop plus the degenerate-group branch shows where the compute actually leaks.
+
+```mermaid
+flowchart LR
+    P["prompt"] --> G["sample G completions from the policy"]
+    G --> V["verifier: tests pass, answer matches, proof checks"]
+    V --> A["advantage = r minus group mean,<br/>divided by group std, no critic network"]
+    A --> U["policy-gradient step, KL leash<br/>to the reference model"]
+    U --> P
+    V --> DEG{"all correct or all wrong?"}
+    DEG -->|"yes"| ZERO["advantage is zero, rollouts wasted:<br/>fix with curriculum and filtering"]
+```
 
 **Follow-ups:** How would you construct the prompt curriculum to avoid degenerate groups? If RLVR mostly elicits, what does that imply about where to spend your next dollar?
 
@@ -1194,6 +1596,19 @@ Cause 2, and my prior favourite, the fine-tuning data. Long-context SFT corpora 
 Then the boring checks that embarrass people: did the chat template or tokenizer change, is the eval using a different sampling config, is the new serving path quantizing the KV cache when the old one did not.
 
 And I would reopen the requirement. If RULER-style evals put effective context at 64k, we paid a short-prompt quality tax for a number on a slide. I would want the effective-context measurement before defending 256k.
+
+**Worth sketching.** The three-configuration isolation step is the answer; everything else follows from which branch you land on.
+
+```mermaid
+flowchart TD
+    S["short prompts worse, output verbose"] --> ISO["run the old short-context suite on three configs:<br/>base, extended, extended with scaling disabled"]
+    ISO --> D{"does disabling RoPE scaling restore quality?"}
+    D -->|"yes"| SC["scaling is applying at every length:<br/>use the YaRN ramp above trained length,<br/>check attention temperature and rope_theta"]
+    D -->|"no"| DATA["fine-tune data was all long docs<br/>with long answers, hence the verbosity"]
+    DATA --> RP["mix short-context SFT back in as replay"]
+    SC --> CHK["then the boring checks: chat template,<br/>sampling config, KV cache quantization"]
+    RP --> CHK
+```
 
 **Follow-ups:** How much short-context replay data would you mix in, and how would you pick that ratio? If disabling RoPE scaling restores short-prompt quality, what's your next move?
 

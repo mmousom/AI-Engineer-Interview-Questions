@@ -2,6 +2,12 @@
 
 50 questions: 13 basic, 23 intermediate, 14 advanced.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. Why do people say "evals are the moat" for AI products? What makes them the core engineering artifact?
@@ -15,6 +21,19 @@ Concretely, evals function the way unit tests function for conventional software
 The engineering loop this enables - eval-driven development - is: ship → observe production traces and feedback → do error analysis on failing transcripts → add the failures to the eval set → change the prompt/model/pipeline → run evals → ship if no regression. Teams stuck at "vibes" re-litigate quality subjectively on every change and can't tell whether a model upgrade helped or hurt.
 
 A good candidate also notes the limits: an eval suite only measures what you thought to encode, it goes stale as usage shifts, and you can overfit to it. So the moat needs maintenance - fresh examples rotating in from production, periodic human calibration of any model graders, and honest tracking of the gap between offline scores and online metrics.
+
+**Worth sketching.** Drawing the loop makes the point that the suite is fed by production, not written once at the start.
+
+```mermaid
+flowchart LR
+    S["Ship change"] --> O["Observe traces<br/>and feedback"]
+    O --> E["Error analysis on<br/>failing transcripts"]
+    E --> A["Add failures<br/>to the eval set"]
+    A --> C["Change prompt,<br/>model or pipeline"]
+    C --> R["Run evals"]
+    R -->|"regression"| C
+    R -->|"clean"| S
+```
 
 **Follow-ups:** How would you convince a team shipping on vibes to invest in evals? What's the smallest useful eval suite you'd build in week one? Who should own the eval set - engineering, PM, or a dedicated team?
 
@@ -34,6 +53,19 @@ Four tiers, ordered by cost and by how much human judgment they encode:
 The operating principle: **use the cheapest grader that faithfully captures the criterion.** If you can write an assertion, never use a judge. If a judge suffices, don't burn human hours on routine grading - spend them auditing the judge. And treat offline evals as predictors that online metrics must confirm; a persistent gap between offline scores and online outcomes means your eval set no longer represents production traffic.
 
 Strong candidates add that these compose within one suite: a single test case might assert JSON validity (code), score faithfulness (judge), and feed an online resolution-rate metric once deployed.
+
+**Worth sketching.** Drawn as a decision tree, it shows you escalate to expensive graders only when the cheap one cannot carry the criterion.
+
+```mermaid
+flowchart TD
+    Q["Criterion to grade"] --> D1{"Deterministically<br/>checkable?"}
+    D1 -->|"yes"| A["Code assertion:<br/>free, exact, every push"]
+    D1 -->|"no"| D2{"Rubric a careful<br/>human could apply?"}
+    D2 -->|"yes"| J["LLM judge,<br/>calibrated against humans"]
+    D2 -->|"no"| H["Human eval:<br/>ground truth and audits"]
+    A --> ON["Online A/B confirms<br/>on real users"]
+    J --> ON
+```
 
 **Follow-ups:** Give a concrete criterion that looks judge-worthy but can be reduced to an assertion. When would you pay for human eval even though your judge agrees with humans 85% of the time?
 
@@ -151,6 +183,17 @@ This mirrors classical experimentation practice - big-tech A/B platforms have lo
 
 A subtle point: some metrics switch categories by product. Latency is a guardrail for chat but *the* quality metric for an autocomplete product; refusal rate is a guardrail ceiling (over-refusal annoys users) and floor (under-refusal is unsafe) simultaneously - worth tracking as two directional metrics.
 
+**Worth sketching.** The two branches make the asymmetry concrete: one is a debate, the other is not.
+
+```mermaid
+flowchart TD
+    R["Eval run vs baseline"] --> G{"Guardrail<br/>regressed?"}
+    G -->|"yes, any amount"| B["Block the release"]
+    G -->|"no"| Q{"Quality drop beyond<br/>the noise band?"}
+    Q -->|"yes"| RV["Read the flipped cases,<br/>then decide"]
+    Q -->|"no"| S["Ship; cost and latency<br/>tradeoffs are negotiable"]
+```
+
 **Follow-ups:** How would you set the threshold for a guardrail like jailbreak rate - zero or nonzero? Your helpfulness A/B win ships and escalation rate rises 15% - what happened?
 
 </details>
@@ -194,6 +237,19 @@ The practical test I use: the metric that pages you at 3am is observability (err
 They depend on each other in one direction. You cannot build good evals without observability, because production traces are where eval examples come from. But observability without evals is the classic trap: dashboards stay green on volume and latency while quality quietly rots, because nothing in the stack is asking whether the answers are any good.
 
 Online evals are where the line blurs, and that confuses people. Sampling 2% of production traces and scoring them with a judge is running an eval on top of observability data. That is one pipeline, but it is still worth keeping the concepts separate: if you conflate them, you end up believing a green latency dashboard means a healthy product.
+
+**Worth sketching.** One data source, two consumers: it shows why vendors bundle them and why you should still keep the concepts apart.
+
+```mermaid
+flowchart LR
+    T["One production trace"] --> O["Observability:<br/>what happened"]
+    T --> G["Sample and grade"]
+    G --> E["Eval: was it good"]
+    O --> A["Pages you at 3am:<br/>errors, p95, cost spike"]
+    E --> C["Blocks a merge:<br/>pass rate on the golden set"]
+    O --> F["Failing traces become<br/>new eval cases"]
+    F --> G
+```
 
 **Follow-ups:** Which of the two would you build first on a brand new LLM feature, and why? If your observability bill got cut in half, what would you stop capturing?
 
@@ -253,6 +309,18 @@ PII and consent apply here too: production-sourced examples inherit whatever obl
 
 Structurally I keep two things apart: a frozen regression suite that changes rarely and gates merges, and a living development set that absorbs new production failures. Mixing them means you can never tell a real regression from a set that got harder.
 
+**Worth sketching.** Fanning the inputs into the score kills the assumption that versioning the examples is enough.
+
+```mermaid
+flowchart LR
+    E["Examples and<br/>expected outputs"] --> S["Score: 82%"]
+    R["Rubric wording"] --> S
+    G["Grader code"] --> S
+    J["Judge prompt and<br/>pinned judge model"] --> S
+    P["Sampling params"] --> S
+    S --> V["All five stamped on<br/>every result row"]
+```
+
 **Follow-ups:** How would you handle an example everyone agrees is mislabelled but that has been in the frozen suite for a year? What goes in the eval set versus a unit test?
 
 </details>
@@ -270,6 +338,18 @@ Two caveats worth raising. First, as of 2026 much of the GenAI convention set is
 Second, and more important in interviews: the conventions cover mechanics, not quality. Tokens, models, parameters, latency, finish reasons. There is no standard for "was this answer correct" or "did this violate policy". Eval scores and safety verdicts are your own custom attributes layered on top. OTel gives you the skeleton and portability; the judgement is still yours to build.
 
 Also note that capturing prompt and completion content is deliberately opt-in, because that content is where the privacy exposure lives.
+
+**Worth sketching.** It shows the seam that keeps you portable, and where the conventions stop and your own judgement starts.
+
+```mermaid
+flowchart LR
+    A["App and framework code"] --> S["OTel GenAI spans:<br/>model, tokens, latency"]
+    H["HTTP and DB spans"] --> S
+    S --> B1["Langfuse or Phoenix"]
+    S --> B2["Datadog or Honeycomb"]
+    S --> B3["Your own collector"]
+    S --> Q["Eval score and policy verdict:<br/>custom attributes you add"]
+```
 
 **Follow-ups:** How would you attach an eval score to a span after the fact? What would you do when a convention you depend on changes names in a new release?
 
@@ -310,6 +390,18 @@ Second-order biases worth naming: **sycophancy toward stated positions** in the 
 
 Process-level mitigations that help across the board: chain-of-thought before verdict (forces engagement with content), decomposed binary criteria instead of holistic scores (less room for halo effects), few-shot anchor examples in the judge prompt, and - non-negotiable - **calibration against human labels** with agreement measured per criterion, so you know which of your judge's verdicts to trust and which to route to humans.
 
+**Worth sketching.** The swap is two API calls and one branch, and drawing it explains why you accept double judge cost without arguing.
+
+```mermaid
+flowchart TD
+    P["Responses A and B"] --> O1["Judge call 1:<br/>A first, then B"]
+    P --> O2["Judge call 2:<br/>B first, then A"]
+    O1 --> C{"Same winner<br/>in both orders?"}
+    O2 --> C
+    C -->|"yes"| W["Count the win"]
+    C -->|"no"| T["Score a tie:<br/>you measured position bias"]
+```
+
 **Follow-ups:** Design a quick experiment to measure position bias in your own judge. Your judge is from the same family as your production model and switching families drops agreement with humans - what now?
 
 </details>
@@ -327,6 +419,19 @@ You trust a judge the same way you trust any model: measure it against ground tr
 5. **Re-calibrate on triggers**: judge model version change, rubric change, task drift, or any period where judge scores and online metrics diverge. Keep a small "judge regression suite" of past disagreements.
 
 Reference point: the MT-Bench work found strong judges reach ~80% agreement with humans on chat quality - about the human - human rate. Matching inter-human agreement is the realistic bar; requiring 100% is incoherent since your ground truth doesn't achieve it either.
+
+**Worth sketching.** Putting the human-human rate in a box of its own is what stops the conversation drifting toward "get the judge to 95%".
+
+```mermaid
+flowchart TD
+    S["50-100 sampled outputs,<br/>including borderline cases"] --> H["2-3 humans label<br/>against a shared rubric"]
+    H --> C["Inter-human agreement<br/>= your ceiling"]
+    C --> J["Run the judge,<br/>compute kappa"]
+    J --> D{"At the ceiling?"}
+    D -->|"no"| F["Read every disagreement,<br/>fix rubric or judge prompt"]
+    F --> J
+    D -->|"yes"| A["Automate; re-calibrate on<br/>judge or rubric change"]
+```
 
 **Follow-ups:** Kappa is 0.45 - what specifically do you do next? How do you keep calibration current without a standing labelling team?
 
@@ -428,6 +533,19 @@ Why both: an end-to-end failure is ambiguous between "retrieval missed the docum
 
 Classic interview trap: quoting only faithfulness. A system that answers "I don't know" to everything is perfectly faithful - pair faithfulness with answer relevance/completeness or you'll optimise into uselessness.
 
+**Worth sketching.** Hanging each metric off the component it grades is the fastest way to show you can localise a fault instead of just reporting one.
+
+```mermaid
+flowchart LR
+    Q["Query"] --> R["Retriever"]
+    R --> C["Top-k chunks"]
+    C --> G["Generator"]
+    G --> A["Answer"]
+    R -.-> M1["recall@k:<br/>ceiling on everything after it"]
+    G -.-> M2["faithfulness and answer relevance,<br/>context held fixed"]
+    A -.-> M3["end-to-end correctness<br/>and citation accuracy"]
+```
+
 **Follow-ups:** Recall@10 is 95% but end-to-end correctness is 70% - where do you look? How do you keep retrieval labels valid when the corpus is re-chunked?
 
 </details>
@@ -443,6 +561,18 @@ Classic interview trap: quoting only faithfulness. A system that answers "I don'
 Practical guidance: for a RAG pipeline, report **recall@k for the retriever** (binary labels, cheap) and **nDCG@k or MRR for the reranker**, and watch **precision@k / context precision** too - irrelevant chunks in the window aren't free, they dilute attention, add tokens, and seed hallucinations. A retriever tuned for recall alone will happily pad the context with noise.
 
 Also name the labelling caveat: all of these are computed against *judged* relevance, and un-judged retrieved chunks are typically treated as irrelevant - which penalises a new retriever that finds genuinely relevant chunks your labels missed (the classic pooling problem from IR). Audit a sample of "misses" by hand before concluding a new embedder is worse.
+
+**Worth sketching.** Placing each metric at the stage it belongs to stops the usual muddle of quoting one number for the whole pipeline.
+
+```mermaid
+flowchart LR
+    Q["Query"] --> R["Retrieve top-50"]
+    R --> K["Rerank to top-10"]
+    K --> P["Context window"]
+    R -.-> M1["recall@50:<br/>did the gold chunk survive?"]
+    K -.-> M2["nDCG@10 or MRR:<br/>is the order right?"]
+    P -.-> M3["precision@k:<br/>noise dilutes attention"]
+```
 
 **Follow-ups:** Your new embedder improves nDCG but end-to-end answers get worse - what mechanisms could explain that? Why might recall@5 matter more than recall@20 even though your context fits 20 chunks?
 
@@ -466,6 +596,21 @@ Design details that matter: exempt non-factual content (hedges, formatting, the 
 
 Two traps to name: verifying with the *same* model that generated the answer inflates scores (self-preference - use another family); and optimising faithfulness alone drives the system toward vacuous hedging - an answer saying nothing is perfectly faithful. Always pair it with answer relevance/completeness. And calibrate the whole judge pipeline against ~50 human-labelled examples before wiring it into CI.
 
+**Worth sketching.** Splitting the three verdicts on the page is what separates you from candidates who say "we ask a judge if it is grounded".
+
+```mermaid
+flowchart TD
+    A["Answer"] --> D["Decompose into<br/>atomic factual claims"]
+    D --> V["Judge each claim against<br/>the retrieved chunks"]
+    V -->|"supported"| S["Must quote the span"]
+    V -->|"contradicted"| X["The scarier class,<br/>reported separately"]
+    V -->|"not found"| N["Strict or lenient,<br/>by domain policy"]
+    S --> F["Score = supported / claims"]
+    X --> F
+    N --> F
+    F --> R["Pair with relevance, or<br/>pure hedging scores 100%"]
+```
+
 **Follow-ups:** How would you cheaply monitor faithfulness on live traffic where there's no reference answer? A claim is supported by chunk A but contradicted by chunk B in the same context - what should the metric do?
 
 </details>
@@ -483,6 +628,19 @@ Treat prompts, rubrics, and eval datasets as code: versioned in the repo, change
 5. **Versioning discipline**: every result records prompt version, model version, dataset version, judge version. Change the dataset or judge → re-baseline; never compare scores across those boundaries.
 
 The failure mode to avoid: an advisory eval job whose red X everyone merges past. Gates must block, and to keep blocking politically survivable, keep the blocking suite small, fast, stable, and visibly correlated with real quality.
+
+**Worth sketching.** Two different gates on one run: draw it and the hard-versus-statistical distinction stops needing explanation.
+
+```mermaid
+flowchart TD
+    PR["PR touches prompt,<br/>model pin or retrieval config"] --> S["Blocking suite:<br/>50-200 cases, minutes"]
+    N["Nightly run on production config,<br/>catches upstream changes"] --> S
+    S --> G{"Guardrail<br/>failure?"}
+    G -->|"yes"| B["Block the merge"]
+    G -->|"no"| Q{"Quality drop beyond<br/>the noise threshold?"}
+    Q -->|"yes"| B
+    Q -->|"no"| M["Merge, with the per-case<br/>flip diff in the PR"]
+```
 
 **Follow-ups:** A PR improves the target task but flips two unrelated cases to failing - what's your process? How do you keep judge-based CI costs sane as the team's PR volume grows?
 
@@ -511,6 +669,19 @@ For retrieval/ranking changes specifically, mention **interleaving**: mix result
 
 Close the loop: log arm assignment into traces so offline error analysis can compare transcripts across arms, and track offline-eval-score vs online-outcome correlation - if they diverge, your eval set has drifted from production.
 
+**Worth sketching.** The guardrail branch sitting downstream of the primary metric is the part interviewers listen for.
+
+```mermaid
+flowchart TD
+    U["Randomise by user,<br/>not by request"] --> A["Arm A: incumbent"]
+    U --> B["Arm B: candidate"]
+    A --> M["Primary: task resolution<br/>Implicit: regeneration, edit distance"]
+    B --> M
+    M --> D{"Guardrails held?<br/>p95, cost, escalation"}
+    D -->|"no"| K["Experiment fails, whatever<br/>the primary metric says"]
+    D -->|"yes"| S["Ship if the test was powered"]
+```
+
 **Follow-ups:** Thumbs-up rate went up but escalation rate also went up - construct a story that explains both. When would you ship on offline evals alone, without an A/B?
 
 </details>
@@ -527,6 +698,18 @@ The goal is to leave with a ranked list of failure *modes* and fix the biggest o
 4. **Fix the top cluster, verify, repeat.** Before fixing, convert 10-20 exemplars of that cluster into eval cases - that's your regression test and your success measure for the fix. Apply the fix, run evals, confirm the cluster shrinks without others growing, ship, and re-run the analysis next cycle.
 
 Two senior habits: report base rates ("retrieval misses are 32% of failures affecting 4% of all sessions") so effort maps to impact; and institutionalise the loop - a weekly hour of transcript-reading for the whole team outperforms any dashboard, because dashboards tell you *that*, transcripts tell you *why*.
+
+**Worth sketching.** The funnel shows the numbers shrinking from 500 to one fix, which is the discipline the question is testing.
+
+```mermaid
+flowchart TD
+    F["500 flagged transcripts"] --> R["Read 30-50 end to end,<br/>one open note each"]
+    R --> T["Hand-derive a taxonomy<br/>of 5-10 failure modes"]
+    T --> C["LLM assigns the rest,<br/>you audit a sample"]
+    C --> P["Rank by frequency x severity<br/>x fixability"]
+    P --> E["Top cluster: 10-20 exemplars<br/>become eval cases"]
+    E --> X["Fix, confirm that cluster shrinks<br/>and others do not grow"]
+```
 
 **Follow-ups:** How do you handle failure modes that only appear in multi-turn context? What do you do with the "not actually a failure" cluster?
 
@@ -551,6 +734,18 @@ Anti-overfitting practices, borrowed straight from ML hygiene:
 - **Watch the offline - online correlation** explicitly: it's the canary for a stale suite.
 
 **Versioning is what makes freshness safe**: every dataset change bumps a version, results always record dataset + prompt + model + judge versions, and score comparisons only happen within a version. Otherwise "we improved 5 points" is uninterpretable - you may have just swapped hard cases out. When you must compare across versions, re-run the baseline config on the new dataset.
+
+**Worth sketching.** Showing new cases landing in test first, not dev, is the detail that tells an interviewer you have actually run this.
+
+```mermaid
+flowchart LR
+    P["Production signals:<br/>thumbs-down, escalations"] --> T["Weekly triage queue"]
+    T -->|"promoted here first"| TE["Test slice:<br/>ship decisions only"]
+    TE -->|"rotates in later"| DV["Dev slice:<br/>prompt iteration"]
+    DV -->|"saturated cases"| SM["Smoke tier:<br/>catches catastrophic breaks"]
+    DV --> W{"Dev and test<br/>scores diverging?"}
+    W -->|"yes"| O["You have overfit dev.<br/>Refresh it"]
+```
 
 **Follow-ups:** Concretely, how would you detect that your team has overfit the dev set? Who triages the production-failure queue, and what's the admission bar for a new eval case?
 
@@ -642,6 +837,18 @@ Canary: serve the candidate to a small slice, ~1-5%, with guardrails wired to au
 A/B: user-level randomisation, powered, run for one to two weeks against a north-star product metric plus guardrails. This is the only one that answers "is this better for users", and the only one that sees novelty effects and longer-horizon behaviour like retention and escalation rates.
 
 Not every change earns all four stages. A prompt typo fix goes offline eval then ship. A model family swap gets the full ladder, because that is where behaviour shifts in ways your eval set has never seen.
+
+**Worth sketching.** Writing the question each stage answers under each box is what stops the three from sounding interchangeable.
+
+```mermaid
+flowchart LR
+    O["Offline evals"] --> S["Shadow: mirror traffic,<br/>nobody sees the output"]
+    S --> C["Canary: 1-5% of users,<br/>auto-rollback on guardrails"]
+    C --> A["A/B: user-randomised,<br/>1-2 weeks, powered"]
+    S -.-> Q1["Sane on the real<br/>input distribution?"]
+    C -.-> Q2["Survives contact?<br/>Blast radius, not statistics"]
+    A -.-> Q3["Actually better<br/>for users?"]
+```
 
 **Follow-ups:** How would you shadow an agent that writes to a production database? Your canary looks fine at 2% and quality tanks at 50%. What happened?
 
@@ -737,6 +944,19 @@ Then dual-run. Score the last several releases' eval sets under both judges and 
 
 One cheap ongoing safeguard: keep a judge sanity set of ~30 items with known, unambiguous verdicts and run it before every eval batch. If the judge fails those, the batch is void and something moved upstream.
 
+**Worth sketching.** It frames the judge swap as a change that has to pass its own eval, which is the answer the question is fishing for.
+
+```mermaid
+flowchart TD
+    C["Human-labelled<br/>calibration set"] --> J1["Old judge"]
+    C --> J2["New judge"]
+    J1 --> A{"New agreement at<br/>least as good?"}
+    J2 --> A
+    A -->|"no"| R["Reject: a stronger model<br/>is not a better judge"]
+    A -->|"yes"| D["Dual-run past releases,<br/>publish the offset"]
+    D --> B["Re-baseline and annotate<br/>the dashboard at cutover"]
+```
+
 **Follow-ups:** The new judge agrees with humans slightly less but is 5x cheaper. Do you take it? How would you detect a judge drifting if the version is genuinely pinned?
 
 </details>
@@ -754,6 +974,18 @@ Agents make evaluation harder in three ways: many valid paths to success, state 
 **Trajectory-based**: score the *path* - tool-choice accuracy (right tool for the step), argument correctness, step efficiency (steps taken vs a reasonable minimum; loop detection), error recovery behaviour, and safety along the way (an agent that succeeds but ran a destructive command en route is a failure). Graded by assertions against expected tool sequences where the path is constrained, or by judges over the trace where it isn't. Trajectory scoring is the *diagnostic* layer: outcome metrics tell you the 40% failure rate; trajectory analysis tells you it's mostly wrong arguments to the search tool at step 2.
 
 Practices that matter: run **k trials per task** - agent variance is enormous, single runs are anecdotes; report pass@k *and* **pass^k** (all k succeed, per τ-bench) because reliability is the product metric - 80% per-trial success is pass^8 ≈ 17%. Grade partial credit via milestone/subgoal checkpoints so long tasks yield gradient, not just 0/1. And keep a transcript-reading habit: agent failure modes (loops, hallucinated tool outputs, giving up early) are obvious to a human reader and invisible in aggregates.
+
+**Worth sketching.** Two arrows off the same run: one grades the world, the other grades the path, and only the second tells you where to look.
+
+```mermaid
+flowchart LR
+    T["Task in a seeded sandbox"] --> R["Trajectory:<br/>step 1, 2, ... n"]
+    R --> F["Final environment state"]
+    F --> O["Outcome grade:<br/>did the booking row change?"]
+    R --> J["Trajectory grade: tool choice,<br/>arguments, loops, destructive steps"]
+    O --> K["k trials: report pass@k<br/>and pass^k"]
+    J --> L["Localises it:<br/>wrong arguments at step 2"]
+```
 
 **Follow-ups:** How do you eval an agent whose tools hit non-resettable third-party APIs? Your agent scores well in the simulator and disappoints in production - enumerate the gaps.
 
@@ -792,6 +1024,19 @@ But the right analysis is **paired**, and that's the senior move: both prompts r
 Also account for **sampling nondeterminism**: at temperature > 0 (and even nominally at 0, given serving-stack nondeterminism), the same prompt re-run flips cases. Run each config k times (even k=3) to estimate per-case flip variance; judge-graded metrics add judge variance on top - repeated judging of identical outputs shows verdict flips too. Anthropic's "Adding Error Bars to Evals" work is the reference for doing this properly (clustered standard errors, paired inference, power analysis).
 
 What I'd actually do: (1) read the ~16 flipped transcripts - five minutes that often settles it (real fix vs noise vs new failure mode); (2) if the direction looks real but underpowered, grow n on the hard slice or accept-and-monitor if the change is low-risk and reversible; (3) never ship a guardrail-metric regression regardless of the topline win.
+
+**Worth sketching.** Splitting 100 cases into agreeing and discordant is the whole argument for paired analysis in one picture.
+
+```mermaid
+flowchart TD
+    R["Same 100 cases,<br/>prompt A vs prompt B"] --> D["84 cases agree:<br/>zero signal"]
+    R --> F["16 discordant cases"]
+    F --> UP["10 flipped fail to pass"]
+    F --> DN["6 flipped pass to fail"]
+    UP --> M{"Does 10 of 16 beat<br/>a coin flip?"}
+    DN --> M
+    M -->|"no"| RD["Read those 16 transcripts<br/>before deciding anything"]
+```
 
 **Follow-ups:** How large would n need to be to reliably detect a true 4-point improvement (power)? How does per-case flip variance change your CI math?
 
@@ -843,6 +1088,20 @@ Four distinct drift classes, each needing its own detection:
 
 Wiring: alerts fire on trend breaks, and the response runbook is always the same - join the shifted metric against version/config boundaries in traces, sample transcripts from before/after, do error analysis, and promote representative shifted cases into the eval set so the drift becomes a regression test.
 
+**Worth sketching.** Pairing every drift class with its own detector shows you know one dashboard cannot catch all four.
+
+```mermaid
+flowchart LR
+    D["Drift"] --> M["Model: alias re-pointed<br/>under a pinned name"]
+    D --> I["Input: new locales,<br/>intents, longer prompts"]
+    D --> B["Output: refusal rate,<br/>length, tool-call mix"]
+    D --> C["Cost: prompt bloat,<br/>step creep, cache decay"]
+    M --> M2["Scheduled canary eval<br/>on the production config"]
+    I --> I2["Topic and language mix<br/>over sampled traffic"]
+    B --> B2["Output distributions<br/>plus judge on a slice"]
+    C --> C2["Tokens and steps per task,<br/>trended per route"]
+```
+
 **Follow-ups:** Your canary is green but user complaints are rising - what's your canary missing? How would you detect that a provider quietly changed a model behind a pinned version string?
 
 </details>
@@ -868,6 +1127,18 @@ Defences:
 3. **Measure the proxy gap**: periodically re-calibrate judges against humans, and track offline-score vs online-outcome correlation - divergence means the proxy has been gamed or has drifted.
 4. **Human transcript review as backstop**: humans notice "technically scores well but is worse" instantly; schedule that review, don't hope for it.
 5. **Report distributions and slices, not single numbers** - gaming usually shows up as a weird distribution before it shows in the mean.
+
+**Worth sketching.** Drawing the degenerate solution as a step on the path makes the counter-metric look like an obvious defence rather than extra process.
+
+```mermaid
+flowchart LR
+    M["Metric becomes the target"] --> O["Optimisation pressure:<br/>RLHF, prompt iteration, leaderboards"]
+    O --> DG["Degenerate solution:<br/>hedge, pad, over-refuse"]
+    DG --> U["Metric up, quality flat"]
+    U --> P["Pair it with the counter-metric<br/>the degenerate solution tanks"]
+    P --> E["faithfulness + completeness,<br/>resolution + reopen rate"]
+    U --> H["Held-out slice the<br/>optimiser never sees"]
+```
 
 **Follow-ups:** How is RLHF reward hacking formally the same problem, and what do the mitigations share? Your judge-optimised prompt gained 6 points offline and flat online - walk through the diagnosis.
 
@@ -937,6 +1208,20 @@ Watch multiple comparisons. Twelve slices at alpha 0.05 gives you roughly a 46% 
 
 Then decide. If the segment is small and the regression is cosmetic, ship with a follow-up. If it is your enterprise tier, do not ship. Usually reading those 8 points of failures reveals one fixable cause, like the new prompt assuming a formatting convention that only that segment violates.
 
+**Worth sketching.** One aggregate box exploding into slices is the fastest way to argue that the gate belongs on the slices, not the average.
+
+```mermaid
+flowchart TD
+    A["Aggregate: +3 points"] --> S["Split by pre-declared slices"]
+    S --> S1["EN retail: +5"]
+    S --> S2["JA enterprise: -8"]
+    S --> S3["Nine other slices: flat"]
+    S1 --> G{"Any slice regressed<br/>beyond its noise floor?"}
+    S2 --> G
+    G -->|"yes"| R["Read that slice's failures;<br/>usually one fixable cause"]
+    G -->|"no"| SH["Ship"]
+```
+
 **Follow-ups:** How do you pick slices for failure modes you have not thought of yet? The regressed slice has 12 examples total. What do you do?
 
 </details>
@@ -999,6 +1284,19 @@ So layer it. Replay for unit and integration tests on every commit. A stateful m
 
 Practical details that bite: define miss policy explicitly (strict error versus record-and-passthrough in update mode); handle side effects and idempotency; and re-record on a schedule, because recorded tool responses rot as the real APIs drift, and a green replay suite against a stale recording is a false sense of safety.
 
+**Worth sketching.** The key-miss branch is the honest part of the answer, and it is much easier to draw than to describe.
+
+```mermaid
+flowchart TD
+    L["Live run"] --> REC["Record every boundary:<br/>tool results, completions,<br/>clock reads, seeds"]
+    REC --> ST["Keyed by tool name plus<br/>normalised arguments"]
+    ST --> RP["Replay: your orchestration runs,<br/>everything it observes is stubbed"]
+    RP --> H{"Key hit?"}
+    H -->|"yes"| OK["Seconds, no spend, no flakes"]
+    H -->|"no"| MS["Prompt changed the question:<br/>hard error, or lose determinism"]
+    MS --> SB["Behaviour evals need a stateful<br/>mocked sandbox instead"]
+```
+
 **Follow-ups:** How do you detect that your recordings have gone stale? Where does the mocked sandbox stop being worth its maintenance cost?
 
 </details>
@@ -1027,6 +1325,19 @@ Then fix in order: add the complaint traces to the set so the fix is verifiable,
 
 The cultural point I would push: treat this as a P1 on the eval suite itself, not just on the feature. The feature bug is one incident; a suite that cannot see this class of bug will let the next ten through.
 
+**Worth sketching.** The first branch is the whole trick: run the complaints through the grader before you touch the model.
+
+```mermaid
+flowchart TD
+    C["Pull 20 traces users<br/>complained about"] --> G["Run them through<br/>your own grader"]
+    G -->|"grader passes them"| B["The grader is broken.<br/>Fix it, and keep these as cases"]
+    G -->|"grader fails them"| CV["Coverage gap.<br/>Check in this order"]
+    CV --> D1["Slice mix vs<br/>last week's traffic"]
+    CV --> D2["Unscored dimensions:<br/>latency, truncation, tone"]
+    CV --> D3["Turn depth:<br/>complaints live at turn 4"]
+    CV --> D4["Concentration:<br/>one locale, one customer"]
+```
+
 **Follow-ups:** How would you prevent this recurring without doubling eval cost? What if the complaints came from 3 users out of 50,000?
 
 </details>
@@ -1050,6 +1361,20 @@ Redundancy and cost. Items whose verdict has not changed across the last 20 runs
 Flakiness per item. Items whose verdict flips run to run with no change are either genuinely borderline or badly graded. Quarantine and diagnose. Flaky evals get ignored exactly like flaky tests, and one ignored suite means nobody reads any of it.
 
 Cadence: audit quarterly, and re-run the crippled-config test whenever the suite changes materially. Track escaped defects continuously, since that is the one that tells you the truth.
+
+**Worth sketching.** Two configs through one suite, and the size of the gap is the verdict on the suite rather than on the system.
+
+```mermaid
+flowchart LR
+    S["The same eval suite"] --> R["Real system"]
+    S --> C["Crippled config: weaker model,<br/>retrieval off, key instruction removed"]
+    R --> S1["91%"]
+    C --> S2["89%"]
+    S1 --> D{"Gap wider than<br/>the noise floor?"}
+    S2 --> D
+    D -->|"no"| X["Suite is decorative; every past<br/>decision was a coin flip"]
+    D -->|"yes"| Y["Suite discriminates. Now track<br/>escaped defects too"]
+```
 
 **Follow-ups:** Your suite catches 9 of 10 escaped defects but takes 40 minutes in CI. Worth it? How would you build the crippled config without it being trivially detectable?
 
