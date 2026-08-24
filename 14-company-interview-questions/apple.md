@@ -238,6 +238,40 @@ Avoid: framing secrecy as purely frustrating, describing how you worked around i
 
 </details>
 
+### 12. A user says "send Maya the photos from Saturday's hike." Design the on-device path from that utterance to a structured app action with resolved parameters.
+
+<details><summary><b>Answer</b></summary>
+
+Treat this as three staged problems, not one prompt: action selection, parameter resolution, and commitment.
+
+**Action selection.** The device holds a registry of app-declared actions - Apple's App Intents framework is the public surface, with typed `AppIntent` parameters and `AppEntity` types for each app's domain objects. Do not stuff every installed app's intents into the prompt; with hundreds of apps that blows both the on-device context limit and the TTFT budget. Retrieve first: embed the utterance, run semantic retrieval over intent descriptions and app-shortcut phrases, keep ~10 candidates, then let the model select one and fill parameters under constrained decoding against that intent's schema, so the call parses by construction.
+
+**Parameter resolution** is the harder half, and mostly not the model's job. "Maya" resolves against contacts, "Saturday's hike" against photo-library date and scene metadata. Those are on-device indexes; the model proposes a query, the resolver returns ranked candidates with confidence. That structure is also why personal data never enters a prompt - you resolve references locally instead of shipping the user's contact graph anywhere.
+
+**Ambiguity and commitment.** Two Mayas, or three matching date ranges, is a disambiguation turn, not a guess; framework-level disambiguation is cheaper and more predictable than model-level guessing. Then gate on consequence: read-only actions can just run, while mutating or externally visible ones (sending, sharing, purchasing, deleting) need confirmation that displays the *resolved* entities. The asymmetry is the point - a wrong recipient on a photo share is unrecoverable, a wrong timer is not.
+
+**Speech and latency.** Stream ASR so intent retrieval starts before endpointing, and budget the whole turn - a spoken assistant feels broken past roughly a second of dead air.
+
+**Worth sketching.** The staged pipeline, and where the two user-facing gates sit.
+
+```mermaid
+flowchart TD
+    A["Utterance<br/>streaming ASR"] --> B["Retrieve top-10<br/>candidate app intents"]
+    B --> C["On-device model picks intent,<br/>fills parameters"]
+    C --> D["Resolve entities against<br/>contacts, photos, calendar"]
+    D --> E{"Unambiguous?"}
+    E -->|"no"| F["Ask user to disambiguate"]
+    F --> D
+    E -->|"yes"| G{"Consequential action?"}
+    G -->|"yes"| H["Confirm resolved entities"]
+    G -->|"no"| I["Execute"]
+    H --> I
+```
+
+**Follow-ups:** The utterance matches no installed intent - what does the system do, and what does the user hear? How would you measure end-to-end action accuracy across third-party apps without logging what people actually asked for?
+
+</details>
+
 ## How to prepare
 
 **Repo deep-dives, in priority order for Apple:**
@@ -268,6 +302,8 @@ Avoid: framing secrecy as purely frustrating, describing how you worked around i
 - [Apple Intelligence Foundation Language Models Tech Report 2025 - Apple Machine Learning Research](https://machinelearning.apple.com/research/apple-foundation-models-tech-report-2025)
 - [Apple Machine Learning Research blog](https://machinelearning.apple.com/)
 - [Private Cloud Compute - Apple Security Research blog](https://security.apple.com/blog/private-cloud-compute/)
+- [App Intents framework - Apple Developer Documentation](https://developer.apple.com/documentation/appintents) (intents, entities, parameter resolution, disambiguation, confirmation)
+- [Apple introduces Siri AI - Apple Newsroom](https://www.apple.com/newsroom/2026/06/apple-introduces-siri-ai-a-profoundly-more-capable-and-personal-assistant/) (personal context, onscreen awareness, systemwide app actions)
 - [Exponent - Apple Machine Learning Engineer Interview Guide](https://www.tryexponent.com/guides/apple-machine-learning-engineer-interview)
 - [Interview Query - Apple Machine Learning Engineer Interview Guide](https://www.interviewquery.com/interview-guides/apple-machine-learning-engineer)
 - [Glassdoor - Apple Machine Learning Engineer interview reports](https://www.glassdoor.com/Interview/Apple-Machine-Learning-Engineer-Interview-Questions-EI_IE1138.0,5_KO6,31.htm)

@@ -276,6 +276,52 @@ Close with the commitment: document the decision and criteria in writing so the 
 
 </details>
 
+### 11. A Structured Streaming job reads Kafka and writes to a Delta table. The cluster is killed mid-batch and restarts. Does the customer get duplicate rows? Explain at the level of the checkpoint and the transaction log.
+
+<details><summary><b>Answer</b></summary>
+
+No duplicates, and it is worth being precise about why, because the guarantee comes from three cooperating pieces rather than from the engine being clever.
+
+**The checkpoint is a write-ahead log of offsets.** Before batch N runs, the engine records that batch's Kafka offset range in the checkpoint's offset log; after the batch finishes it writes an entry to the commit log. On restart, an offset entry with no matching commit means batch N was in flight, so the engine replays it over exactly the same offset range. Deterministic re-execution is what makes the retry safe.
+
+**The Delta sink makes that replay idempotent.** Each micro-batch commits one atomic JSON file into `_delta_log` holding the AddFile actions plus a transaction action recording (application id, batch id). If the log already carries that pair, the replayed write is a no-op. And because a commit is a single atomic file, readers never see half a batch.
+
+**Where it actually breaks** is the real question. `foreachBatch` writing to an external system gets none of this unless you pass the transaction identifiers through or dedupe yourself, and two writes inside one `foreachBatch` need distinct application ids. Non-deterministic logic (`current_timestamp()`, random sampling, a join against a table that keeps changing) means the replay is not the same batch. Deleting or relocating the checkpoint loses the offsets outright. Kafka retention that has aged past the stored offsets either fails or silently skips depending on `failOnDataLoss`. And exactly-once into Delta says nothing about side effects the batch already performed, such as emails sent.
+
+**Worth sketching.** The two logs do different jobs: the checkpoint decides what to replay, the transaction log decides whether the replay lands.
+
+```mermaid
+flowchart LR
+    A["Offset log entry<br/>batch N"] --> B["Run batch N"]
+    B --> C["Delta commit<br/>AddFile + txn(appId, N)"]
+    C --> D["Commit log entry<br/>batch N"]
+    E["Restart: offset<br/>with no commit"] --> B
+    C -->|"txn already present"| F["Write skipped"]
+```
+
+**Follow-ups:** The customer wants exactly-once from `foreachBatch` into Postgres. What do you build? What does the transaction log give you here that a plain Parquet directory sink cannot?
+
+</details>
+
+### 12. An agent you shipped for a customer four months ago runs on a base model the provider is deprecating in 60 days. How do you swap the model without regressing quality, and what had to be in place beforehand for that to be possible?
+
+<details><summary><b>Answer</b></summary>
+
+Most of the answer is about what you did four months ago. If the only asset is a notebook with prompts pasted inline, you cannot swap safely, you can only swap and hope. What must already exist:
+
+- **Traces on every production request**: inputs, retrieved chunks, tool calls, outputs, latency, token cost, and whatever feedback the UI captures. MLflow tracing on Databricks exists for this, and the traces are the raw material for everything below.
+- **A versioned evaluation dataset built from those traces**, not from synthetic questions alone, including the failure cases you have fixed since launch, governed in Unity Catalog so it has lineage instead of living as a CSV on someone's laptop.
+- **Scorers you trust**: LLM judges for groundedness, correctness and safety, plus cheap deterministic checks specific to the task (the JSON parses against the schema, the generated SQL executes, every claim carries a citation id).
+- **Prompts and agent config versioned as artefacts**, with serving pointed at a registry alias rather than a pinned version, so promotion and rollback are one pointer move.
+
+The swap itself: register the challenger, run the eval offline, and compare per slice rather than on the aggregate mean, because regressions concentrate in slices (long documents, one language, one tool path) while the average looks fine. Budget for prompt re-tuning, since prompts do not transfer cleanly across model families. Then canary or shadow a fraction of live traffic with scoring on a sample, watching cost and latency next to quality: a cheaper model that emits far more tokens per answer can lose on both. Move the alias when the slices hold, and keep the previous version registered so rollback takes minutes.
+
+The same discipline applies whether the agent was assembled through the low-code path (Agent Bricks) or written against the code-first framework. Say the unglamorous part too: someone owns feeding new production failures back into the eval set, or it ages into a benchmark you have quietly overfitted.
+
+**Follow-ups:** The challenger wins overall but loses on your two most important customer slices. What do you ship? How large does the eval set need to be before you would trust a small score difference?
+
+</details>
+
 ## How to prepare
 
 Priority order for this repo's topics:
@@ -304,4 +350,6 @@ Company-specific moves:
 - [interviewing.io - Databricks interview process & questions](https://interviewing.io/databricks-interview-questions) - SWE loop structure, difficulty, Google-Docs design round, references/committee details (fetched July 2026)
 - [Dataford - Databricks AI Engineer interview guide](https://dataford.io/interview-guides/databricks/ai-engineer) - AI-engineer-specific loop and topic areas (third-party; fetched July 2026)
 - [Blind - Databricks interview discussions](https://www.teamblind.com/company/Databricks/posts/databricks-interview) - candidate reports on loop length and coding bar (consulted via search)
+- [MLflow 3 for GenAI - Databricks documentation](https://docs.databricks.com/aws/en/mlflow3/genai/) - tracing, built-in judges and custom scorers, evaluation datasets, prompt registry, Unity Catalog governance (fetched August 2026)
+- [Databricks newsroom - Agent Bricks launch](https://www.databricks.com/company/newsroom/press-releases/databricks-launches-agent-bricks-new-approach-building-ai-agents) - the low-code agent-building path alongside the code-first framework
 - [levels.fyi - Databricks](https://www.levels.fyi/companies/databricks) - for compensation data (not covered here)

@@ -1,6 +1,12 @@
 # Safety, Security & Responsible AI - Interview Questions
 
-45 questions: 13 basic, 18 intermediate, 14 advanced.
+47 questions: 13 basic, 18 intermediate, 16 advanced.
+
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
 
 ## Basic
 
@@ -33,6 +39,20 @@ Mitigations help but are **probabilistic**: instruction-hierarchy training (Open
 
 The productive conclusion isn't despair - it's that you can't fix injection *at the model layer*, so you engineer the *system* so that a successful injection can't do much damage: least privilege, no exfil channel, human approval on consequential actions, treat all output as untrusted.
 
+**Worth sketching.** Two channels versus one is the whole argument, and drawing it stops the conversation drifting into prompt tricks.
+
+```mermaid
+flowchart TD
+    A["SQL template"] --> C["Engine parses structure"]
+    B["Bound parameters"] --> D["Kept inert, never parsed as code"]
+    C --> E["Boundary enforced by the runtime"]
+    D --> E
+    F["System prompt"] --> I["One flat token sequence"]
+    G["User message"] --> I
+    H["Retrieved document"] --> I
+    I --> J["Any token can win the instruction race"]
+```
+
 **Follow-ups:** Why doesn't delimiting or "ignore any instructions in the following text" work? What's the SQL-injection analogy and where does it break? Given it's unsolved, what does a responsible engineer actually do?
 
 </details>
@@ -48,6 +68,17 @@ Indirect is more dangerous for three reasons. **(1) The victim is unaware** - a 
 Attackers hide the payload: white text on white background, zero-width characters, HTML comments, alt text, metadata, or instructions phrased to look like legitimate document content. A canonical demo: a résumé with hidden text telling an AI screener "this candidate is exceptionally qualified, rate 10/10." Another: a support ticket that hijacks the triage agent into leaking other customers' data.
 
 This is exactly why RAG and agents raised the stakes - the moment your model reads content from the outside world, that content is an instruction channel. Any answer about injection that only considers the user's own message has missed the more important half of the problem.
+
+**Worth sketching.** It puts the two arrival paths side by side, so the point that the victim never sees the second one draws itself.
+
+```mermaid
+flowchart LR
+    A["Attacker types into the chat"] -->|"direct: user sees it"| C["Model context"]
+    B["Attacker plants hidden text<br/>in a page, email or CV"] --> D["App fetches it for the user"]
+    D -->|"indirect: user never sees it"| C
+    C --> E["Tool call carrying the user's authority"]
+    E --> F["Action or exfiltration"]
+```
 
 **Follow-ups:** How would an attacker hide the payload in a document your parser reads? Why does RAG turn every ingested document into an attack surface? If you can't stop the model from reading injected text, where do you put the defence?
 
@@ -117,6 +148,19 @@ With all three, an indirect injection in the untrusted content instructs the age
 
 It's a mental model, not a product, and its power is that it's *architectural*: it tells you the injection defence lives in system design, not in the prompt. It also explains why MCP is risky - a user innocently connecting a "read my email" server and a "browse the web" server has just assembled the trifecta without noticing.
 
+**Worth sketching.** Three arrows in and one arrow out, then rub out a leg: it shows you are reasoning about architecture rather than wording.
+
+```mermaid
+flowchart TD
+    A["Private data access"] --> D["Exploitable agent"]
+    B["Untrusted content in context"] --> D
+    C["Exfiltration channel"] --> D
+    D --> E["Injection reads the data<br/>and ships it out"]
+    C -->|"remove: human clicks send"| F["Attack broken"]
+    B -->|"remove: quarantine external content"| F
+    A -->|"remove: split public and private agents"| F
+```
+
 **Follow-ups:** Markdown image rendering is a classic exfil channel - why, and how do you close it? Which leg is usually easiest to remove in practice? How does connecting multiple MCP servers accidentally create the trifecta?
 
 </details>
@@ -161,6 +205,19 @@ Controls map to channels: use enterprise/API tiers that **don't train on your da
 
 A crisp interview framing: draw the data-flow diagram - user → app → model → tools → logs → traces → storage - and put a control on *every* hop where data leaves your trust boundary. Interviewers reward the person who names the observability and log channels unprompted, because that's the one real teams actually get burned by.
 
+**Worth sketching.** Draw every hop out of the app and the observability branch stops being the one nobody mentions.
+
+```mermaid
+flowchart LR
+    U["User data"] --> A["Your app"]
+    A -->|"crosses your trust boundary"| M["Vendor model API"]
+    A -->|"full prompts and completions"| T["Logs and traces"]
+    A -->|"shared across tenants?"| C["Cache and vector index"]
+    A -->|"baked into weights"| F["Fine-tune and eval sets"]
+    M --> R["Response"]
+    R --> A
+```
+
 **Follow-ups:** Which of these channels do teams most often forget? How does a shared prompt cache leak data across tenants? What's the difference between "vendor doesn't train on my data" and "zero data retention"?
 
 </details>
@@ -197,6 +254,22 @@ The defences follow classic capability-security thinking. Do not let the model d
 
 The same pattern shows up in OAuth flows for MCP clients, where a shared client identity plus a pre-consented redirect lets an attacker inherit a user's grant.
 
+**Worth sketching.** The attacker never touches the CRM, and a sequence makes that obvious: the authority on that arrow is the user's.
+
+```mermaid
+sequenceDiagram
+    participant Attacker
+    participant Webpage
+    participant Agent
+    participant CRM
+    Attacker->>Webpage: plants instruction-shaped text
+    Agent->>Webpage: fetches it mid-task
+    Webpage->>Agent: text arrives as just more tokens
+    Agent->>CRM: query signed with the user's token
+    CRM->>Agent: records, correctly authorised
+    Agent->>Attacker: data leaves the boundary
+```
+
 **Follow-ups:** How does the confused deputy framing change your design compared to just calling it prompt injection? What would ambient authority look like in a concrete agent you have built, and how would you remove it?
 
 </details>
@@ -230,6 +303,21 @@ class AgentBreaker:
 The loop guard (same tool, same arguments, more than twice) catches the single most common runaway pattern and costs nothing.
 
 Three things people get wrong about the kill switch. It must be out of band: if the stop command is routed through the agent's own loop, it does not work when the loop is wedged. It must revoke credentials, not just terminate a process, because in-flight requests and queued jobs continue. And it needs a tested granularity ladder: per-session, per-tool flag, per-tenant pause, then global. A single big red button that takes the whole product down never gets pressed, which means it may as well not exist.
+
+**Worth sketching.** Putting the thresholds on the exit arrows shows you know the automatic control lives inside the loop and the manual one has to sit outside it.
+
+```mermaid
+flowchart TD
+    A["Agent step"] --> B["Breaker check"]
+    B -->|"steps over cap"| S["Trip and stop"]
+    B -->|"cost over budget"| S
+    B -->|"3 failures in a row"| S
+    B -->|"same tool and args twice"| S
+    B -->|"all clear"| C["Execute tool"]
+    C --> A
+    H["Human kill switch<br/>out of band"] --> R["Revoke credentials"]
+    R --> S
+```
 
 **Follow-ups:** What would you alert on to catch a runaway agent before the breaker trips? How do you make sure the kill switch actually works when you need it, given it is never exercised in normal operation?
 
@@ -269,6 +357,22 @@ The defences follow from that. Never write raw untrusted content to memory: extr
 
 Published memory-injection research shows high success rates against production agent architectures, which is a good reason not to treat this as theoretical.
 
+**Worth sketching.** The gap between the write arrow and the read arrow is the entire point, and a sequence puts it where the interviewer can see it.
+
+```mermaid
+sequenceDiagram
+    participant Attacker
+    participant Source
+    participant Agent
+    participant Memory
+    Attacker->>Source: hides an instruction shaped like a preference
+    Agent->>Source: reads it during an unrelated task
+    Agent->>Memory: writes it as a learned fact
+    Agent->>Memory: retrieves it days later in a fresh session
+    Memory->>Agent: returns it wearing trusted provenance
+    Agent->>Attacker: acts on the planted instruction
+```
+
 **Follow-ups:** How would you audit an existing memory store to find out if it has already been poisoned? Should an agent be allowed to write to its own long-term memory at all, and what changes if the memory is shared across a team?
 
 </details>
@@ -294,6 +398,18 @@ No single layer is trusted; each shrinks blast radius. From outside in:
 **Monitoring.** Immutable audit log of prompts, outputs, tool calls, approvals; anomaly alerts (spend spikes, unusual tool sequences, classifier-hit rates). Feed incidents back into regression evals.
 
 The interview signal is prioritisation: if forced to pick, **least privilege + human approval on consequential actions** buy the most safety, because they cap damage regardless of whether the model was fooled. Classifiers reduce *frequency* of attacks; architecture reduces *impact*. You want both, but impact-reduction is what makes the system defensible.
+
+**Worth sketching.** Labelling which layers cut frequency and which cut blast radius is what turns a list of controls into a prioritisation argument.
+
+```mermaid
+flowchart TD
+    A["Request"] --> B["Input classifiers"]
+    B -->|"reduce attack frequency"| C["Model layer<br/>instruction hierarchy, delimited data"]
+    C --> D["Privilege layer<br/>least-privilege tools, scoped creds"]
+    D -->|"reduce blast radius"| E["Output layer<br/>schema validation, encoding"]
+    E --> F["Human approval on irreversible actions"]
+    F --> G["Audit log and anomaly alerts"]
+```
 
 **Follow-ups:** If you could only implement two layers, which two and why? How do you keep the input classifiers from adding 500ms of latency? Where does this design still fail, and is that residual risk acceptable?
 
@@ -332,6 +448,20 @@ A guardrail layer is input and output classification wrapped around the model. D
 
 **False positives** are a real product cost - every wrongly blocked benign request is churn and support load. So: measure FP rate on a benign-traffic set, tune thresholds per surface (stricter on a public untrusted surface, looser for authenticated internal users), prefer a soft response (clarify/reframe) over a hard block where you can, and log FPs to retrain. Also remember guardrail models are themselves attackable - an injection can target the classifier - so they reduce risk, they don't eliminate it.
 
+**Worth sketching.** The parallel branch is the whole latency trick, and it is impossible to see in a bulleted list.
+
+```mermaid
+flowchart TD
+    A["Request"] --> B["Heuristics: length, denylist, rate"]
+    B --> C["Injection classifier<br/>tens of ms"]
+    A --> D["Main generation starts in parallel"]
+    C -->|"hit"| E["Cancel the generation, block"]
+    C -->|"clear"| F["Output checks: moderation, PII, schema"]
+    D --> F
+    F -->|"call has an effect"| G["Hard gate before the tool"]
+    F -->|"display only"| H["Stream to the user"]
+```
+
 **Follow-ups:** How do you guardrail a streaming response without killing the UX? Where would you spend a strict latency budget of 150ms total overhead? How do you decide the threshold trade-off between missed attacks and blocked good requests?
 
 </details>
@@ -355,6 +485,20 @@ Treat PII as something to keep out of every place it doesn't strictly need to be
 **Support deletion.** GDPR/CCPA require erasure - easy for RAG (drop the document, re-index) but effectively impossible if PII is baked into fine-tuned weights, which is a strong argument against fine-tuning on raw PII.
 
 The framing interviewers want: privacy is a data-flow property, so put a control on every edge where data crosses a trust boundary - not a single scrubber at the front door.
+
+**Worth sketching.** Showing where the token map lives answers the rehydration follow-up before it is asked.
+
+```mermaid
+flowchart LR
+    A["Raw input with PII"] --> B["Detector"]
+    B --> C["Placeholders: PERSON_1, PHONE_1"]
+    B --> D["Token map, stays in your trusted layer"]
+    C --> E["Model or vendor API"]
+    E --> F["Answer still in placeholders"]
+    F --> G["Rehydrate from the map"]
+    G --> H["User"]
+    C --> L["Logs and traces only ever see placeholders"]
+```
 
 **Follow-ups:** How do you re-insert the real names into the model's answer after redaction? Why is fine-tuning on PII a deletion nightmare? Which is the channel teams most often forget to redact?
 
@@ -411,6 +555,18 @@ Loading a model is running someone's code and trusting someone's artifact. Three
 **Dependencies.** The Python/ML stack is a huge dependency tree (transformers, tokenizers, CUDA libs, custom kernels), each a supply-chain vector - typosquatting, malicious versions, `trust_remote_code=True` executing arbitrary repo code on model load. Mitigations: lockfiles and pinned versions, SBOMs, vulnerability scanning, avoid `trust_remote_code` unless the source is trusted, and vendor/mirror critical artifacts.
 
 The theme is that AI supply chain is classic supply-chain security plus two new artifact types (weights, datasets) that can carry payloads inspection won't reveal.
+
+**Worth sketching.** One boundary with four things crossing it makes clear which risks a format change fixes and which it does not touch at all.
+
+```mermaid
+flowchart LR
+    A["Checkpoint file"] -->|"pickle: code runs on load"| R["Your runtime"]
+    A -->|"safetensors: tensors and metadata only"| R
+    B["Repo code via trust_remote_code"] --> R
+    C["Pinned deps and lockfile"] --> R
+    D["Unknown training provenance"] --> W["Backdoor no benchmark will trip"]
+    R --> W
+```
 
 **Follow-ups:** Why exactly is unpickling dangerous, and what does safetensors change? What is a model backdoor and why can't you just inspect the weights to find it? What does `trust_remote_code=True` do and when is it acceptable?
 
@@ -515,6 +671,17 @@ hits = index.search(vec, k=8, filter={"tenant_id": ctx.tenant_id, "acl": {"$in":
 
 Post-filtering after retrieval is a bug: you have already paid for the wrong hits, and k is now wrong too.
 
+**Worth sketching.** Drawing the stale-permissions branch is faster than explaining it, and it lands why post-filtering is a patch rather than a fix.
+
+```mermaid
+flowchart TD
+    I["Ingest time: bake the ACL into the index"] --> S["Snapshot of who could see it in March"]
+    S --> L["July query returns grants that expired"]
+    L --> X["Post-filter cleans up afterwards<br/>k is already wrong"]
+    Q["Query time: filter inside the datastore"] --> P["tenant_id and ACL as mandatory predicates"]
+    P --> K["Right hits, right k, current permissions"]
+```
+
 **Follow-ups:** Why is post-filtering after retrieval a correctness problem and not just a performance one? How would you handle a document whose permissions change after it has been embedded and indexed?
 
 </details>
@@ -542,6 +709,19 @@ Then approvals. The failure mode is real and worth naming: if you prompt the use
 
 **Batch and rate-limit approvals** so each one carries information, and log the approver, the effect hash and the latency. Approvals granted in under two seconds are a metric: that is your rubber-stamping rate, and you should alert on it.
 
+**Worth sketching.** Tiering by reversibility rather than by "is it a tool call" is the idea worth drawing, and the approval-latency arrow is what makes it a real control.
+
+```mermaid
+flowchart TD
+    A["Tool call requested"] --> B["How reversible is the effect?"]
+    B -->|"read only"| C["Auto-approve"]
+    B -->|"write under the threshold"| D["Auto-approve, log the effect"]
+    B -->|"inside the band"| E["Prompt with the server-computed effect"]
+    B -->|"above the ceiling"| F["Hard deny, no approve button"]
+    E --> G["Log approver, effect hash, latency"]
+    G -->|"decided in under 2s"| H["Rubber-stamping metric"]
+```
+
 **Follow-ups:** How would you decide the auto-approve threshold for a refund agent? What do you show a user approving something they cannot realistically evaluate, like a generated SQL migration?
 
 </details>
@@ -561,6 +741,18 @@ This is the question that decides whether your audit log means anything. Three o
 The implementation details that matter: token exchange happens server-side and the model never sees a credential, because anything in the context window is exfiltrable; lifetimes in minutes, not hours, and scoped per session and per tool; a revocation path that works without a deploy; and audit records carrying both the human principal and the agent identity.
 
 The question I would ask any design: if this agent is fully compromised right now, exactly which rows can it touch? A shared service account cannot answer that.
+
+**Worth sketching.** Same injection, two credential designs, two very different blast radii: the contrast does the arguing for you.
+
+```mermaid
+flowchart LR
+    A["Injection lands"] --> B["Shared service account"]
+    B --> C["Reach equals the union of every user's access"]
+    C --> D["Audit says: ai-agent-svc did it"]
+    A --> E["Delegated, downscoped, short-lived token"]
+    E --> F["Reach bounded by this one user's ACLs"]
+    F --> G["Audit carries human and agent identity"]
+```
 
 **Follow-ups:** How do you handle a legitimate background agent that runs when no user is present, so there is no user token to delegate? What breaks in this model when the agent needs to call a third-party MCP server that does its own OAuth?
 
@@ -635,6 +827,19 @@ The rest of the stack:
 
 For images specifically, note there is no reliable extract-and-scan step, which is a good argument for not letting a tool-enabled model read arbitrary user-supplied images.
 
+**Worth sketching.** It shows the scanner sitting on the same extraction the model consumes, which is the detail that decides whether the check is real or a bypass.
+
+```mermaid
+flowchart LR
+    A["PDF, HTML or office doc"] --> B["Extraction the model actually consumes"]
+    B --> C["Injection scan on that exact text"]
+    A --> D["Rasterise, then OCR"]
+    C --> E["Diff the two views"]
+    D --> E
+    E -->|"large mismatch"| F["Content hidden from humans: quarantine"]
+    E -->|"they agree"| G["Pass, tagged with provenance"]
+```
+
 **Follow-ups:** The render-then-OCR diff is expensive. Where would you actually apply it, and what is your fallback elsewhere? How does this change for an image, where you cannot separate the text out to scan it?
 
 </details>
@@ -675,6 +880,19 @@ Wrap that with the standard layers: **least-privilege tools** (read-only default
 
 The trade-off is honest: this sacrifices flexibility - the plan is fixed before the data is seen, so the agent can't adapt to what the content *says* (which is sometimes the whole point), and it's real engineering effort. So you apply the strong isolation to the high-risk path (untrusted content + private data + actions) and allow looser, monitored designs where a successful injection can't hurt (no private data, or no exfil). The headline: injection defence is an *architecture* decision, not a prompt.
 
+**Worth sketching.** The one arrow that never exists, untrusted prose reaching the planner, is easier to point at than to describe.
+
+```mermaid
+flowchart TD
+    A["User request, trusted"] --> B["Privileged planner<br/>sees tools, never content"]
+    B --> C["Plan fixed before anything is fetched"]
+    C --> D["Orchestrator executes the plan"]
+    F["Untrusted page or email"] --> E["Quarantined LLM, no tools"]
+    D --> E
+    E -->|"typed values only, never prose"| D
+    D -->|"policy: tainted value cannot be a recipient"| G["Tool call"]
+```
+
 **Follow-ups:** What does the quarantined LLM return, and why can't its output steer the planner? What flow policy specifically stops exfiltration in CaMeL? What flexibility do you give up, and when is that cost unacceptable?
 
 </details>
@@ -694,6 +912,21 @@ Red teaming is adversarial testing to find harms before attackers/users do. A cr
 **Timing.** Pre-launch is a gate: don't ship until the critical categories are exercised and the criticals are fixed. But **models and apps drift** - a provider model update, a new tool, a prompt tweak, a new jailbreak-of-the-week can all reopen holes - so red teaming is **continuous**: re-run the automated suite in CI on every change, do periodic fresh manual campaigns, and monitor production traffic for novel attacks (which become new test cases).
 
 **Feedback loop (the part that makes it worth anything).** Every confirmed finding becomes: (1) a **regression eval** in the automated suite so it can't silently return, (2) a fix (guardrail, prompt, architecture, or provider escalation), and (3) a tracked metric - **attack success rate by category over time**. A red-team finding that isn't turned into a permanent test is a finding you'll rediscover in an incident.
+
+**Worth sketching.** The arrow back into the automated suite is the part programmes skip, and drawing the loop closed is the whole signal here.
+
+```mermaid
+flowchart LR
+    A["Harms list from the threat model"] --> B["Manual campaigns<br/>security plus domain experts"]
+    A --> C["Automated suite in CI<br/>garak, PyRIT, known corpora"]
+    D["Production traffic"] --> E["Novel attack observed"]
+    B --> F["Confirmed finding"]
+    C --> F
+    E --> F
+    F --> G["Fix: guardrail, scope or architecture"]
+    F --> H["Regression eval"]
+    H --> C
+```
 
 **Follow-ups:** Why isn't automated red teaming enough on its own? What triggers a re-test after launch? How exactly does a finding become a regression eval, and why is that step non-negotiable?
 
@@ -771,6 +1004,22 @@ When the assistant renders that markdown, the client makes an HTTP GET to `evil.
 
 The teaching point: the vulnerability is architectural (an unattended exfil channel), so the fix is architectural. Any answer that stays at the prompt level has missed it.
 
+**Worth sketching.** Walking the arrows makes the no-click part concrete: the browser, not the user, completes the attack.
+
+```mermaid
+sequenceDiagram
+    participant Attacker
+    participant Inbox
+    participant Assistant
+    participant Browser
+    participant EvilHost
+    Attacker->>Inbox: email carrying hidden instructions
+    Assistant->>Inbox: reads it to summarise
+    Assistant->>Assistant: pulls the secret from its own context
+    Assistant->>Browser: emits markdown image, secret in the URL
+    Browser->>EvilHost: automatic GET, no click required
+```
+
 **Follow-ups:** Why does an image tag exfiltrate without any user click? Which single mitigation here is most robust, and why? How would the same attack adapt if you block images but allow links?
 
 </details>
@@ -816,6 +1065,19 @@ The defining risk: you are **running attacker-influenceable code** (the model is
 - **Observability** - log every command, every file touched, every network attempt; alert on anomalies; support kill-switch and replay.
 
 The senior framing: sandboxing contains blast radius, egress-blocking + no-ambient-creds breaks exfil, and approval gates cap irreversible damage - layered so no single failure is catastrophic.
+
+**Worth sketching.** Drawing the two cut edges, egress and credentials, explains why the sandbox is the control rather than a convenience.
+
+```mermaid
+flowchart LR
+    A["Repo, issues, docs, deps"] -->|"injectable text"| B["Model writes code"]
+    B --> C["Sandbox: microVM, non-root, throwaway FS"]
+    C -->|"egress denied by default, allowlist only"| D["Internet"]
+    C -->|"no ambient creds mounted"| E["Cloud and prod database"]
+    C --> F["stdout re-enters the context, still untrusted"]
+    F --> B
+    C --> G["Push, merge, deploy behind approval"]
+```
 
 **Follow-ups:** Why is blocking network egress the highest-leverage single control? Why must credentials never live inside the sandbox even if the task "needs" them? The generated code's stdout goes back to the model - what's the risk there?
 
@@ -885,6 +1147,19 @@ The design goal is that any incident is answerable by replay, and any runaway is
 
 **The tension to name explicitly.** Full-fidelity agent traces are the largest PII honeypot your team will ever build: complete prompts, retrieved customer documents, tool arguments containing identifiers. The resolution is a redaction pipeline on the hot path with restricted, audited, short-retention access to raw traces, and a longer retention on the redacted tier. If you cannot say who can read raw traces and for how long, your observability system is now your biggest privacy risk.
 
+**Worth sketching.** The ladder is the bit people forget: four rungs of granularity, all fed by the same trace, all out of band from the agent.
+
+```mermaid
+flowchart TD
+    A["Per-step trace<br/>principal, agent id, model version, args, cost"] --> B["Replay and regression corpus"]
+    A --> C["Signals: novel tool sequence,<br/>new egress domain, cost over p99"]
+    C --> D["Per-session circuit breaker, automatic"]
+    D --> E["Per-tool disable flag"]
+    E --> F["Per-tenant pause"]
+    F --> G["Global kill switch"]
+    A --> H["Redaction on the hot path<br/>raw traces are a PII store"]
+```
+
 **Follow-ups:** How do you build a behavioural baseline for a fleet where legitimate agent behaviour changes every time someone edits a prompt? Which of these signals would you page a human for at 3am, and which are dashboard-only?
 
 </details>
@@ -906,6 +1181,17 @@ Multi-agent architectures mostly multiply the trifecta rather than contain it. F
 **The design.** Taint tracking, not trust by origin: a message derived from untrusted content carries the taint through every hop, and policy forbids tainted data from reaching a sink. This is the dual-LLM idea generalised to a fleet, and it is the one thing that actually works. Concretely: a directed allowlist for who may call whom, checked outside the model; the privileged planner never reads untrusted content, only typed values; each agent holds its own identity and credentials rather than a shared service account, so the audit log resolves; depth and budget limits per root task; and every real sink (email, HTTP egress, payments, writes) sitting behind a single policy chokepoint that can see taint, rather than scattered across agents where each one enforces its own slightly different rules.
 
 The honest summary: adding agents does not add security. It adds trust boundaries you now have to enforce, and most frameworks give you zero help with that.
+
+**Worth sketching.** Two versions of the same hop, one where the taint label survives and one where it does not, is the cleanest way to show that a sub-agent is not containment.
+
+```mermaid
+flowchart LR
+    A["Poisoned web page"] --> B["Research agent A"]
+    B -->|"summary, label dropped"| C["Planner B treats it as internal"]
+    C --> D["Sink: send, pay, delete"]
+    B -->|"summary, taint carried"| E["Policy chokepoint reads the taint"]
+    E -->|"tainted value reaching a sink"| F["Blocked"]
+```
 
 **Follow-ups:** How would you actually implement taint propagation across agent messages in a framework that has no concept of it? Does a critic or judge agent reading the same context provide any real safety benefit, or is it theatre?
 
@@ -947,6 +1233,18 @@ Assume a bug first, because base rates say so, but investigate without destroyin
 
 **The real fix, and the answer that separates seniors.** Do not contain this by prompting harder. Wrong prices can be commercially binding, and there is precedent for companies being held to statements their chatbot made. A price is owned by a system of record, so the model should never generate that number: look it up deterministically and render it outside the model, with the model handling the language around it. Any figure with legal or financial weight should come from code, not from tokens. That is a design principle, not an incident response.
 
+**Worth sketching.** Drawing the branch conditions shows you triage on evidence rather than guessing at attack or bug from the symptom.
+
+```mermaid
+flowchart TD
+    A["Wrong prices reported"] --> B["All users, sharp onset?"]
+    B -->|"yes"| C["Deploy, index rebuild<br/>or a floating model alias moved"]
+    B -->|"specific users only"| D["Replay at temperature 0<br/>with the recorded context"]
+    D -->|"context holds the wrong price"| E["Data: stale index, locale field, test fixture"]
+    D -->|"context correct, output wrong"| F["Prompt regression or model change"]
+    D -->|"context holds instruction-like text"| G["Indirect injection: who can write to the corpus?"]
+```
+
 **Follow-ups:** Where else in this product would you apply the never let the model generate the number rule? If it turns out to be injection via a supplier catalogue feed, what changes structurally?
 
 </details>
@@ -966,5 +1264,62 @@ The first thing I would say is that CV screening is an Annex III high-risk use u
 **And the part product teams do not want to hear:** measure whether the human actually overrides. If override rates are near zero, you do not have human oversight, you have automation bias with a compliance label on it. The honest recommendation may be to narrow the scope: assist with summarisation, do not rank, and never auto-reject. Pushing back on scope is part of the job here.
 
 **Follow-ups:** How would you evidence human oversight to an auditor when reviewers approve nearly everything? If counterfactual name-swapping shows a consistent delta, is redaction sufficient, or does that just hide the proxy?
+
+</details>
+
+### 46. Your agent buys things on behalf of users. Design the authorisation trail so a disputed transaction is resolvable.
+
+<details><summary><b>Answer</b></summary>
+
+A log line saying the agent charged the card is not evidence. It is a row in your own database, written by the party under dispute. What resolves a disputed transaction is a chain of signatures produced at the moment each decision happened, with keys the agent operator does not control.
+
+A dispute asks three questions, and each needs its own signed artifact.
+
+**What the user authorised.** Two shapes, and conflating them is the usual design error. Human present, the user sees the finalised cart and signs it: items, merchant, total. Human not present, the buy-the-tickets-the-moment-they-drop case, there is no cart yet, so the user signs constraints in advance: price ceiling, item specification, merchant set, validity window. Any later transaction must verify against them.
+
+**What the agent assembled.** The merchant signs the finalised checkout, so the price cannot be revised afterwards.
+
+**What was charged.** A payment authorisation bound to that specific checkout, not a free-floating card charge.
+
+The binding is what teams skip. Each artifact carries a hash of the previous one, so nothing can be substituted later and the set only verifies as a whole.
+
+AP2, the Agent Payments Protocol, standardises this. It launched in September 2025 with over 60 organisations including Mastercard, American Express, PayPal and Coinbase, reached v0.2 in April 2026, and has been contributed to the FIDO Alliance. The original Intent, Cart and Payment mandates became, in v0.2, a Checkout Mandate and a Payment Mandate, each with an Open form carrying user constraints and a Closed form bound to the finalised checkout by a checkout_hash claim, secured as SD-JWTs, with receipts referencing the mandates.
+
+Two things most candidates miss. The signing key must sit where the model cannot reach it, on a trusted surface such as the user's device, or you are back to self-attestation. And absence is evidence too: an agent that transacted with no verifying mandate has told you whose loss it is.
+
+This is the concrete form of the defence the confused-deputy and denial-of-wallet answers gesture at. An injection can steer the agent but cannot mint a user signature, and a signed price ceiling is a spend limit enforced outside the model rather than inside its prompt. Keep mandates and receipts for the full chargeback window.
+
+**Worth sketching.** Each stage signed and hash-bound to the one before, which is what makes the set hold up.
+
+```mermaid
+flowchart TD
+    A["User signs constraints or a specific cart"] --> B["Agent negotiates a checkout"]
+    B --> C["Merchant signs the finalised checkout"]
+    C --> D["Payment mandate hash-bound to it"]
+    D --> E["Receipts reference both mandates"]
+    E --> F["Dispute resolved by verifying the chain"]
+```
+
+**Follow-ups:** The user's constraint said under 200 and the agent found the item at 195 plus an 18 delivery fee. Whose reading binds, and where in your design is that decided? What changes when the counterparty is also an agent and no human is present on either side?
+
+</details>
+
+### 47. A customer asks you to prove which of these documents your model wrote. What can you actually deliver?
+
+<details><summary><b>Answer</b></summary>
+
+I can prove which documents our system produced. I cannot prove which it did not, and I can say nothing about documents another model wrote. Three mechanisms, in decreasing order of usefulness.
+
+**Server-side records of your own generations.** The one that works. Hash every completion at generation time alongside request ID, model version, account and timestamp. A customer brings a document, you normalise and hash it, and it matches or it does not. The limits are equally exact: any edit breaks the match, and it says nothing about text you did not generate. Near-duplicate hashing or embedding search over the generation log recovers edited copies, at the cost of a similarity threshold.
+
+**Watermarking.** The SynthID-Text approach biases sampling: candidate tokens compete in a tournament scored by pseudo-random values keyed on the preceding token window and a secret key, so output drifts toward high-scoring tokens. Detection averages those scores over the text and tests against chance. DeepMind published it in Nature in October 2024 and runs it across Gemini, so this is shipped, not theoretical.
+
+Why it degrades where image watermarking does not: the signal lives in choices between tokens, so it exists only where there was a choice. Short outputs give too few scored tokens to clear threshold. Low-entropy generation, a factual answer, a quoted passage, schema-constrained JSON, code, has almost no distributional slack to modulate. Translation regenerates the sequence and removes the signal, paraphrase through another model does much the same, and human editing erodes it progressively. An image watermark is spread redundantly across thousands of pixels and survives re-encoding. A text watermark has only the token stream.
+
+**Post-hoc AI-text detectors.** Not for any decision that affects a person. Liang et al. (Patterns, 2023) ran seven detectors over 91 TOEFL essays by non-native English writers: mean false-positive rate 61.3%, and 97.8% flagged by at least one detector, while native-speaker essays were classified correctly. The bias is structural: perplexity-based detectors read second-language writing as machine-like. OpenAI withdrew its own classifier in 2023 for low accuracy.
+
+So what I deliver: a definitive answer for our outputs from logged hashes, watermark detection as corroborating signal on long-form generations with the caveats written down, and no claims about third-party text. Same boundary as the image-generation answer in the multimodal bank. Provenance identifies your content, it does not detect synthetic text in the wild, which is why transparency obligations target labelling by the generator rather than downstream detection.
+
+**Follow-ups:** Your logged hash misses because the customer reformatted the document before sending it. What do you tell them, and what would you have needed to build to answer differently? If a regulator requires synthetic output to be labelled, does an invisible watermark satisfy that, or do you owe a visible disclosure as well?
 
 </details>

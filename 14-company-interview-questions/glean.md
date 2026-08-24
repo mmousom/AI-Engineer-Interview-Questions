@@ -233,6 +233,54 @@ Caching is the trap here: answer and retrieval caches must be keyed by the user'
 
 </details>
 
+### 11. Glean's ranking leans on a knowledge graph of people, content and activity. How would you build that graph, and how does it improve retrieval beyond embedding similarity?
+
+<details><summary><b>Answer</b></summary>
+
+Treat the graph as two things at once: a feature store for the ranker, and a query engine in its own right.
+
+Nodes are documents, people, teams, channels, projects and meetings. Edges come from two sources. Connector metadata gives you a lot for free: authorship, ownership, container hierarchy, group and team membership, reporting lines, document-to-document links. Activity events give you the rest: views, edits, shares, comments, meeting attendance.
+
+**Use one - ranking features.** Feed graph-derived signals into the learned ranker alongside BM25 and embedding scores: document authority computed over the link and share graph, recency-decayed engagement, organisational distance between the querying user and the author or recent collaborators, team and channel affinity, co-access patterns. These are what make the identical query text return different and better results for two different people. Semantic similarity cannot do that, because the query embedding is the same for both.
+
+**Use two - structural retrieval.** "Who owns the payments service", "what did my team ship last quarter" and most multi-hop questions are traversals, not nearest-neighbour lookups. Resolve the entity deterministically, walk the edges, then retrieve documents hanging off the resolved nodes.
+
+The hard part is entity resolution. The same human is a Slack user, a Google account, a Jira account and an HR record, and the same project carries three different names across systems. Get that wrong and every personalisation feature turns into noise.
+
+Four constraints worth naming: edges leak (knowing a VP edited "Project Titan spec" reveals the doc exists, so traversal must be ACL-filtered exactly like document retrieval); engagement signals are rich-get-richer, so keep exploration traffic; the graph must decay, or someone who left the team last year keeps boosting; and a brand-new tenant has org structure on day one but no activity, so gate the engagement features on volume thresholds.
+
+**Worth sketching.** Where graph signals enter the pipeline relative to lexical and dense retrieval.
+
+```mermaid
+flowchart LR
+    A["Connectors: metadata<br/>and activity events"] --> B["Knowledge graph<br/>people, docs, teams"]
+    B --> C["Graph features<br/>authority, affinity, distance"]
+    D["BM25 + dense<br/>candidates"] --> E["Learned ranker"]
+    C --> E
+    B -->|"entity lookup"| F["Structural retrieval<br/>multi-hop traversal"]
+    F --> E
+```
+
+**Follow-ups:** How do you resolve the same person or project across ten systems with no shared identifier? Which graph features would you disable for a tenant that has enabled only one connector?
+
+</details>
+
+### 12. Design agent orchestration across dozens of connected SaaS systems. Where is authorization enforced, and why can it not live in the model?
+
+<details><summary><b>Answer</b></summary>
+
+Authorization lives in a deterministic gate at the tool-invocation boundary, with the source system as the second enforcement layer. It cannot live in the model for one reason: the model's input channel is adversarial. Retrieved documents, ticket bodies and Slack messages all enter the context, so any instruction the model will follow can be written by whoever can write into the corpus. A component that can be talked out of a rule is not an access control. The model decides *what to attempt*, a policy engine decides *what executes*.
+
+Concretely, three bounding layers. **Admin scope:** which connectors, MCP servers and tools are registered for the tenant at all, and which roles may invoke them. That bounds the reachable action set before a planner sees anything. **Request-time policy:** every call is checked as a tuple of user principal, tool, resource and action against tenant policy, and denied calls are logged rather than silently dropped. **Delegated identity:** the call runs under the user's own OAuth token so the source system applies its own ACLs independently. Three layers because each one fails differently.
+
+Orchestration at this scale has its own problems. With hundreds of tools you cannot put every schema in the prompt: retrieve a candidate tool set per step, the same ranking problem as document retrieval, and measure tool-selection precision as a first-class metric. Decompose across sub-agents by domain so each carries a small tool surface. Runs are long and partly external, so make them durable: checkpoint after each step, use idempotency keys on writes, and make retries safe because a retried "create ticket" that duplicates is a visible bug.
+
+Context passing between steps is where leaks appear. A step reading a document the user can see may feed text into a step writing somewhere the user's colleagues can read, so re-check visibility at the write boundary, not only at the read.
+
+**Follow-ups:** A tool returns data the user can see but the target system's other viewers cannot - what does the orchestrator do? How would you tell tool-selection failures apart from planning failures in production traces?
+
+</details>
+
 ## How to prepare
 
 **Repo directories, in priority order:**
@@ -261,4 +309,6 @@ Caching is the trap here: answer and retrieval caches must be keyed by the user'
 - [techinterview.org Glean interview guide](https://www.techinterview.org/companies/glean-interview-guide/) - third-party loop structure and round breakdown (unofficial)
 - [Glassdoor: Glean interview questions](https://www.glassdoor.com/Interview/Glean-CA-Interview-Questions-E5795738.htm) - aggregated candidate reports
 - [Blind: Glean interview discussions](https://www.teamblind.com/company/Glean/posts) - candidate-reported loop variations
+- [Glean blog: How knowledge graphs work and why they are the key to context for enterprise AI](https://www.glean.com/blog/knowledge-graph-agentic-engine) - graph structure over people/content/activity, multi-hop and access-controlled traversal
+- [Glean docs: About the Glean MCP server](https://docs.glean.com/administration/platform/mcp/about) - admin-registered MCP servers, tool gateway, OAuth and permission enforcement
 - [levels.fyi: Glean](https://www.levels.fyi/companies/glean) - compensation data

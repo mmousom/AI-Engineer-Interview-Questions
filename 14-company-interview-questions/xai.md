@@ -270,6 +270,38 @@ Tool choices are part of the test: boring stack you know cold (FastAPI + a minim
 
 </details>
 
+### 12. Here is a scheduler class from a small LLM inference engine. One method, `_admit_requests`, is left as a stub - no spec, no docstring, no tests. Walk me through your first thirty minutes.
+
+<details><summary><b>Answer</b></summary>
+
+The contract is already written down in the code, just not in prose. Read it in three places before typing anything.
+
+**Call sites first.** Grep the method name. If `step()` does `admitted = self._admit_requests()` and then passes `admitted` to `self._run_model(...)`, you have the return type and you know the method hands back a collection rather than mutating in place. Callers pin the signature faster than any comment would.
+
+**Then the state the class maintains.** `self.waiting`, `self.running`, `self.free_blocks`, `self.max_batch_size` are the constraints the stub has to respect. Every field in `__init__` the method can reach is a hint about an invariant, and an assertion elsewhere such as `len(self.running) <= self.max_batch_size` is effectively your spec.
+
+**Then the nearest sibling.** An implemented `_preempt` or `_evict` on the same class gives you the error-handling convention, the logging convention, and usually half the invariant set. Mirror it. Sixty seconds of `git log -p` on the file is often worth more than either.
+
+Then the move actually being graded: state the contract out loud before implementing it. "I read this as: admit from the waiting queue while free KV blocks cover the request and the batch is not full, return the admitted list, leave preemption to the caller - correct me if that is wrong." A missing spec is not an invitation to guess silently. Write the smallest correct version, then name what you deliberately skipped - starvation under a stream of long-context requests, priority classes, chunked prefill - instead of half-building them.
+
+Failure modes that sink candidates: reading the repo top to bottom and running out of clock, and refactoring surrounding code to suit your implementation. The round measures day-one usefulness in a fast-moving monorepo, not elegance.
+
+**Worth sketching.** The orientation order, which is the whole answer: contract recovered from the code, stated, then implemented.
+
+```mermaid
+flowchart TD
+    A["Stub: _admit_requests"] --> B["Grep call sites<br/>fixes signature and return type"]
+    B --> C["Read class state<br/>waiting, running, free blocks"]
+    C --> D["Read nearest implemented sibling<br/>conventions and invariants"]
+    D --> E["State the assumed contract out loud"]
+    E --> F["Implement smallest correct version"]
+    F --> G["Name what you left out and why"]
+```
+
+**Follow-ups:** Your version admits greedily and starves 100k-token requests forever - do you fix that inside this method or in the queue? How would you test it without touching any existing code?
+
+</details>
+
 ## How to prepare
 
 Priority order for this repo, given xAI's reported loop:
@@ -292,6 +324,7 @@ Company-specific moves:
 ## Sources
 
 - [Exponent - xAI Interview Process (candidate-verified writeup)](https://www.tryexponent.com/blog/xai-interview-process) - fetched July 2026
+- [Exponent - xAI Software Engineer interview guide](https://www.tryexponent.com/guides/xai-software-engineer-interview) - detail on the codebase-completion round (a large existing class, no tests or specs supplied) behind Q12 - consulted August 2026
 - [techinterview.org - xAI company interview guide](https://www.techinterview.org/companies/xai/) - fetched July 2026
 - [University of Miami Toppel Career Center - Get a Job at xAI (summarising Exponent's candidate reports)](https://customcareer.miami.edu/blog/2026/05/14/get-a-job-at-xai-interview-process-and-top-questions/) - fetched July 2026
 - [x.ai/careers](https://x.ai/careers) - official careers page (blocked automated fetch; consulted via search excerpts)

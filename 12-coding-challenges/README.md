@@ -27,6 +27,12 @@ Almost every AI engineer loop now includes an "implement it from scratch" round.
 | 11 | [11_rate_limiter_and_retry.py](11_rate_limiter_and_retry.py) | Medium | Token bucket, exponential backoff with jitter | Burst vs. sustained rate reasoning, why jitter prevents thundering herd, retry budget caps |
 | 12 | [12_eval_metrics.py](12_eval_metrics.py) | Medium | pass@k unbiased estimator, QA F1/EM, judge harness skeleton | Why the naive pass@k estimator is biased, token-level F1 details, judge calibration hooks |
 | 13 | [13_streaming_parser.py](13_streaming_parser.py) | Hard | SSE parser, incremental tool-call argument assembly | Handling chunks split mid-event/mid-JSON, buffering discipline, partial-parse recovery |
+| 14 | [14_lora_adapter.py](14_lora_adapter.py) | Medium | LoRA forward, merge, and batched multi-adapter serving | Why B is zero-initialised, what alpha/r decouples, why merging costs you hot-swapping |
+| 15 | [15_beam_search.py](15_beam_search.py) | Medium | Beam search with length normalisation | Accumulating log-probs instead of multiplying, parking finished beams, what the length penalty buys |
+| 16 | [16_semantic_cache.py](16_semantic_cache.py) | Medium | Exact and semantic cache tiers, TTL, LRU, tag invalidation | Threshold as a precision/recall business decision, why cache keys must include prompt and model version |
+| 17 | [17_hybrid_search_and_rerank.py](17_hybrid_search_and_rerank.py) | Medium | BM25, reciprocal rank fusion, MMR diversity re-ranking | Where lexical beats dense and vice versa, why RRF fuses ranks rather than scores |
+| 18 | [18_constrained_json_decoding.py](18_constrained_json_decoding.py) | Hard | Masking invalid tokens against a schema during decode | Masking before softmax, why constrained decoding shifts the distribution, DFA vs pushdown for nested JSON |
+| 19 | [19_speculative_decoding.py](19_speculative_decoding.py) | Hard | Draft-and-verify with the exact rejection-sampling rule | Why it is lossless, why accept-if-argmax-matches is not, why it is a bandwidth win not a FLOPs win |
 
 ## Running
 

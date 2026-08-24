@@ -2,6 +2,12 @@
 
 35 questions: 10 basic, 14 intermediate, 11 advanced.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. Walk me through how a modern VLM gets an image into an LLM.
@@ -13,6 +19,19 @@ Three components: a **vision encoder**, a **projector**, and the **LLM**. The im
 Two details interviewers listen for. First, the vision encoder is almost never trained from scratch: it's a CLIP- or SigLIP-pretrained ViT, so its features are already language-aligned, which is why a tiny projector is enough to bridge the two models. Second, training is staged: stage 1 freezes both towers and trains only the projector on image-caption pairs (cheap alignment), stage 2 unfreezes the LLM for visual instruction tuning on image-question-answer data, and later stages add high-resolution handling and preference tuning.
 
 Design variations worth naming: **resampler/Q-Former** projectors (Flamingo, BLIP-2) compress hundreds of patch embeddings into a fixed set of ~32-64 learned query tokens to save context; Flamingo instead injects vision via gated cross-attention layers rather than inline tokens; Fuyu drops the vision encoder entirely and linearly projects raw patches straight into the decoder. Modern open models (LLaVA-NeXT, Qwen-VL, InternVL) mostly converge on MLP projector + image tiling for high resolution.
+
+**Worth sketching.** Drawing the three boxes and the patch count between them makes clear that the projector is the only new part, which is why stage 1 is cheap.
+
+```mermaid
+flowchart LR
+    A["224x224 image"] --> B["Split into 16x16 patches"]
+    B --> C["CLIP or SigLIP ViT"]
+    C --> D["196 patch embeddings"]
+    D --> E["MLP projector"]
+    E --> F["196 vectors in the LLM<br/>token-embedding space"]
+    G["Text token embeddings"] --> H["LLM decoder"]
+    F --> H
+```
 
 **Follow-ups:** Why can you get away with training only the projector in stage 1? What breaks if you use a randomly initialized vision encoder instead of CLIP? How does the model handle an image whose aspect ratio doesn't match the encoder's training resolution?
 
@@ -28,6 +47,18 @@ Why it transfers: the supervision is **open-vocabulary natural language** rather
 
 Caveats a strong candidate volunteers: CLIP is weak on compositional structure - word order, object-attribute binding, counting (it behaves somewhat bag-of-words); its text encoder truncates at 77 tokens; and the two modalities occupy measurably separated regions of the "shared" space (the modality gap). SigLIP, which replaces the softmax contrastive loss with a pairwise sigmoid loss, scales better with batch size and is the common modern substitute.
 
+**Worth sketching.** The similarity matrix is the fastest way to show why batch size is a hyperparameter of the loss itself, not just of the optimiser.
+
+```mermaid
+flowchart LR
+    A["Batch of N image-text pairs"] --> B["Image encoder"]
+    A --> C["Text encoder"]
+    B --> D["N x N cosine similarity matrix"]
+    C --> D
+    D --> E["Diagonal: the N true pairs,<br/>pulled together"]
+    D --> F["Off-diagonal: N-1 negatives per row,<br/>pushed apart"]
+```
+
 **Follow-ups:** Why do large batches matter so much for contrastive learning? How would you use CLIP to build a zero-shot content moderation filter, and where would it fail? What's the modality gap and when does it bite?
 
 </details>
@@ -41,6 +72,17 @@ The vision encoder emits one embedding per patch, and each of those occupies a s
 Concrete provider math: OpenAI's GPT-4o-class high-detail mode resizes the image and cuts it into 512×512 tiles at ~170 tokens per tile plus 85 base tokens (newer models count small patches, same area-scaling principle); Anthropic charges roughly (width × height) / 750 tokens and downscales anything over ~1568px on the long edge, capping an image around ~1.6k tokens; Gemini charges ~258 tokens for small images and tiles larger ones into 768×768 crops at ~258 tokens each. Order of magnitude to keep in your head: **a readable document page is ~1-2k tokens**, so a 100-page PDF sent as images is ~150k tokens per request - that's a real cost and may not even fit the context window.
 
 This is why **tiling / dynamic resolution** schemes exist (LLaVA-NeXT's AnyRes, Qwen-VL's dynamic resolution): the model gets a downscaled global view plus native-resolution crops, spending tokens proportional to image size instead of a fixed budget. It's also why resolution is the first knob in any quality-vs-cost tradeoff: OCR accuracy on small text collapses below a legibility threshold, but pixels beyond the encoder's effective resolution buy nothing. A good answer connects this to prefill compute too - image tokens dominate prefill for vision-heavy workloads, which is where prompt caching of repeated images earns its keep.
+
+**Worth sketching.** It puts the cost driver where it belongs, on tile count rather than on some vague notion of image complexity.
+
+```mermaid
+flowchart TD
+    A["Source page image"] --> B["Downscaled global view<br/>1 tile"]
+    A --> C["Native-resolution crops<br/>k tiles"]
+    B --> D["Visual tokens<br/>~170 per tile plus base"]
+    C --> D
+    D --> E["Prefill compute and context<br/>grow linearly with k"]
+```
 
 **Follow-ups:** You're processing receipts and the model misreads totals - walk me through how you'd decide whether to raise resolution or change approach. Why does a resampler-based model (fixed 64 tokens per image) struggle with dense documents? How would you estimate the monthly bill for a screenshot-heavy agent?
 
@@ -74,6 +116,17 @@ Two processes. The **forward process** is fixed and destructive: take a real ima
 **Generation** runs the reverse chain: start from pure Gaussian noise, repeatedly apply the network to remove a bit of predicted noise, and after enough steps a coherent image emerges. The reason this works where "generate an image in one shot" is hard: each step is a small, well-conditioned correction. Early (high-noise) steps commit to global structure and composition; late steps refine texture and detail. The model never has to solve the whole problem at once - it learns a field of "which direction is more image-like from here" (the score), and sampling follows it.
 
 Numbers worth knowing: training uses ~1000 discrete noise levels; sampling doesn't need to retrace all of them - modern samplers (DDIM and successors) produce good images in 20-50 steps, and **distilled** models (latent consistency models, adversarially distilled turbo variants) get to 1-4 steps, which is what makes real-time generation possible. Text conditioning enters through cross-attention onto text-encoder embeddings, and classifier-free guidance amplifies its effect at sampling time. Also say the phrase "latent diffusion" - production systems don't diffuse pixels, they diffuse a VAE-compressed latent - because it's the single biggest practical efficiency win in this stack.
+
+**Worth sketching.** Drawing the loop makes the point that generation is one small correction repeated, not a single leap from noise to image.
+
+```mermaid
+flowchart LR
+    A["Clean image"] -->|"forward: add noise, ~1000 steps"| B["Pure Gaussian noise"]
+    B --> C["Network predicts the noise at step t"]
+    C --> D["Subtract a little,<br/>move t to t-1"]
+    D -->|"t > 0"| C
+    D -->|"t = 0"| E["Generated image"]
+```
 
 **Follow-ups:** What exactly does the network predict - noise, the clean image, or something else, and does it matter? Why can samplers skip most of the 1000 training steps? What does the noise schedule trade off?
 
@@ -112,6 +165,17 @@ The consequences follow directly from "it is just text":
 Why anyone cares: document AI needs boxes for auditability and redlining, GUI agents need click targets, and citation highlighting in RAG needs a region to draw.
 
 Honest limits: a VLM grounds more coarsely than a dedicated detector does on the classes that detector was trained for, but it is open-vocabulary and instruction-driven, so you can ask for "the signature line under the second table". The pragmatic production pattern is to let the VLM locate roughly, then snap the box to OCR word boxes or to a detector's region proposals.
+
+**Worth sketching.** The round-trip through the preprocessor is where nearly every grounding bug lives, and the sketch makes the missing inverse transform obvious.
+
+```mermaid
+flowchart LR
+    A["Original image, W x H"] --> B["Preprocessor:<br/>resize, pad, maybe tile"]
+    B --> C["Model sees the<br/>preprocessed image"]
+    C --> D["Emits four numbers<br/>as plain text tokens"]
+    D --> E["Invert the exact<br/>resize and pad transform"]
+    E --> F["Box in original pixel space"]
+```
 
 **Follow-ups:** How would you evaluate grounding quality, and why is IoU a poor fit for a document-redaction use case? If a model gives you a box that is close but consistently shifted down and right, what would you check first?
 
@@ -193,6 +257,20 @@ Start with the decision axes: **cost per page, accuracy on your specific fields,
 
 The production answer is a **cascade**: classify documents first; run cheap OCR on everything; handle clean, templated docs with the cheap path; escalate hard or high-value pages to a VLM - and when you do, give the VLM *both* the page image and the OCR text, since they fail differently and the combination beats either. Independently of path: validate against a schema (types, ranges, checksums like line-items-sum-to-total), compute per-field confidence, and route low-confidence extractions to human review. Measure per-field accuracy on a labelled set from your own traffic - public benchmark scores won't predict your invoice layout.
 
+**Worth sketching.** Drawing the cascade shows you are choosing per page rather than picking one architecture for the whole corpus.
+
+```mermaid
+flowchart TD
+    A["Incoming page"] --> B["Classify document type"]
+    B --> C["Cheap OCR on everything"]
+    C --> D{"Clean and templated?"}
+    D -->|"yes"| E["OCR text plus small LLM"]
+    D -->|"no, or high value"| F["VLM on the page image<br/>plus the OCR text"]
+    E --> G["Schema, type and<br/>arithmetic validation"]
+    F --> G
+    G -->|"low confidence"| H["Human review queue"]
+```
+
 **Follow-ups:** How do you catch a VLM confidently misreading a dollar amount? Where does human-in-the-loop go, and how do you decide the confidence threshold? How does the calculus change at 10M pages/month?
 
 </details>
@@ -229,6 +307,18 @@ Components of the full system:
 
 Worth volunteering: the VAE is a quality *ceiling* - anything it can't reconstruct (historically: small faces, fine text) no amount of diffusion quality can recover, which is why later models upgraded to higher-channel latents (e.g. 16-channel in SD3-class models).
 
+**Worth sketching.** Laying out the four components shows where the loop is and, more usefully, that the VAE decoder runs exactly once at the end.
+
+```mermaid
+flowchart LR
+    A["Prompt"] --> B["Text encoders<br/>CLIP and/or T5"]
+    C["Noise in a 64x64x4 latent"] --> D["Denoiser<br/>U-Net or DiT"]
+    B -->|"cross-attention"| D
+    D -->|"20-50 sampler steps<br/>all inside latent space"| E["Clean latent"]
+    E --> F["VAE decoder, runs once"]
+    F --> G["512x512 image"]
+```
+
 **Follow-ups:** Why 4 (or 16) latent channels rather than compressing harder? What does moving from U-Net to DiT buy? Where does ControlNet-style conditioning hook into this architecture?
 
 </details>
@@ -246,6 +336,18 @@ pred = eps_uncond + s * (eps_cond - eps_uncond)   # s = guidance scale
 The vector `(eps_cond - eps_uncond)` isolates *the direction in which the prompt changes the prediction*; multiplying by `s > 1` exaggerates exactly that component. It replaced classifier guidance, which needed a separate noise-robust classifier and its gradients - CFG gets the same effect from the generative model itself, which is why it's "classifier-free."
 
 Effects of the scale: `s = 1` is pure conditional sampling - prompt adherence is mediocre because the condition only weakly shifts the prediction. Typical operating range is ~5-9. As you push higher: prompt adherence and apparent sharpness improve, but **diversity collapses** (samples converge toward a prompt-archetype), colours oversaturate, contrast blows out, and anatomical/geometric artifacts appear - you're extrapolating outside the distribution the model was trained to denoise. Practical costs and consequences worth naming: CFG **doubles compute per sampling step** (two forward passes, usually batched); **negative prompts** are just replacing the unconditional branch's null embedding with an "away-from-this" condition, so the extrapolation points away from the negative; and distilled few-step models often bake guidance in during distillation, which is why turbo-style models expose no meaningful CFG knob.
+
+**Worth sketching.** Two branches per step is the detail people miss, and it explains both the doubled cost and how negative prompts slot in.
+
+```mermaid
+flowchart LR
+    A["Noisy latent at step t"] --> B["Pass 1: with the prompt"]
+    A --> C["Pass 2: null or negative prompt"]
+    B --> D["eps_cond"]
+    C --> E["eps_uncond"]
+    D --> F["eps_uncond + s x difference,<br/>two forward passes per step"]
+    E --> F
+```
 
 **Follow-ups:** Why does high guidance hurt diversity specifically? How do negative prompts work mechanically? Why do guidance-distilled models generate at CFG ≈ 1?
 
@@ -280,6 +382,19 @@ Two architectures. The **pipeline**: streaming ASR → LLM → streaming TTS. Th
 
 **Interruptions (barge-in)** are mandatory, not a nicety: run echo cancellation so the mic doesn't hear the agent's own output; run VAD continuously *during* playback; on detected user speech, stop TTS within ~100-200ms, cancel in-flight LLM generation, and - critically - truncate conversation state to what the user actually *heard*, not what you generated, or the agent will reference things it never said aloud. Also handle backchannels ("mm-hmm" shouldn't trigger a full stop) - a small classifier on the interrupting audio helps.
 
+**Worth sketching.** Writing the per-stage millisecond budget on the arrows is what turns "latency matters" into a design argument the interviewer can check.
+
+```mermaid
+flowchart LR
+    A["User audio"] --> B["VAD endpointing<br/>100-300 ms"]
+    B --> C["Streaming ASR finalise<br/>100-200 ms"]
+    C --> D["LLM time to first token<br/>200-500 ms"]
+    D --> E["TTS time to first audio<br/>100-300 ms"]
+    E --> F["Playback"]
+    A -->|"native speech-to-speech<br/>collapses the middle"| G["Audio in, audio out<br/>~300 ms class"]
+    G --> F
+```
+
 **Follow-ups:** Where do you put safety filtering in a speech-to-speech architecture with no text midpoint? How do you evaluate a voice agent end-to-end? The user interrupts mid-tool-call - what state do you roll back?
 
 </details>
@@ -295,6 +410,17 @@ Sampling strategies, in increasing sophistication: **uniform** (simple, misses f
 Limits to name honestly: **temporal reasoning** is the weak spot - event ordering, causality ("did he fall because the ladder slipped?"), counting repetitions (exercise reps is a classic failure), and anything happening *between* sampled frames (fast motion, subtle actions). Long-horizon coherence degrades: a needle-in-haystack frame in hour two competes with a million tokens of context. Native video encoders that model motion across frames exist in research and in parts of frontier stacks, but sampled-frames-plus-LLM remains the deployed norm.
 
 Production checklist: match sampling rate to the question (surveillance ≠ lecture summarisation), cache encoded video for repeated queries (prompt caching matters enormously here), and consider frame-level retrieval - embed frames, retrieve relevant timestamps per query - instead of stuffing the whole video into context.
+
+**Worth sketching.** Putting the naive path next to the two-pass path makes the token arithmetic do the arguing for you.
+
+```mermaid
+flowchart TD
+    A["1 hour of video"] -->|"naive: uniform 1 fps"| B["~3600 frames,<br/>~1M tokens"]
+    A --> C["Cheap pass: ASR transcript<br/>plus low-fps frames"]
+    C --> D{"Which window<br/>answers the query?"}
+    D --> E["Re-sample that window densely"]
+    E --> F["VLM reasons over<br/>a few hundred frames"]
+```
 
 **Follow-ups:** How would you build "find when the package was delivered" over 24h of doorbell footage without ingesting 24h of tokens? Why is counting event repetitions so hard? When does 1 fps break down?
 
@@ -315,6 +441,20 @@ What separates a senior answer is the practical failure list:
 - **The modality gap**: image and text embeddings cluster in separate cones, so absolute cosine scores are miscalibrated across modalities - rank within a query, don't threshold across queries without calibration.
 
 Evaluate with recall@k on labelled (query, relevant-set) pairs from real traffic, plus online CTR/purchase-through A/B tests.
+
+**Worth sketching.** Separating the offline half from the online half shows where the cost sits and why attribute binding gets fixed in reranking, not retrieval.
+
+```mermaid
+flowchart LR
+    A["100M product images"] --> B["Image tower, offline"]
+    B --> C["ANN index,<br/>product-quantized"]
+    D["Text query"] --> E["Text tower"]
+    E --> C
+    D --> F["Structured filters<br/>and BM25 over titles"]
+    C --> G["Fuse ranked lists"]
+    F --> G
+    G --> H["Rerank top ~50<br/>with a VLM"]
+```
 
 **Follow-ups:** How do you mine hard negatives from click logs without poisoning training with position bias? A merchandiser complains "red dress" surfaces orange dresses - debug path? When is a caption-then-BM25 pipeline actually better than embedding search?
 
@@ -382,6 +522,19 @@ The constraints that actually bind:
 
 And the security framing that separates a senior answer: everything on that screen is untrusted input. A rendered web page can contain text addressed to your agent.
 
+**Worth sketching.** It shows the branch that matters: pixels are the fallback, and the tree path turns coordinate regression into picking an ID.
+
+```mermaid
+flowchart TD
+    A["Current screen"] --> B{"DOM or accessibility<br/>tree available?"}
+    B -->|"yes"| C["Candidate elements<br/>with exact bounds"]
+    C --> D["Numbered set-of-marks<br/>drawn on the screenshot"]
+    D --> E["Model returns an element ID"]
+    B -->|"no: canvas, remote desktop"| F["Raw coordinates, mapped back<br/>through the resize transform"]
+    E --> G["Act, screenshot, confirm<br/>the state actually changed"]
+    F --> G
+```
+
 **Follow-ups:** How would you handle an app with no accessibility tree and a canvas-rendered UI? What would you log so that you can debug a failed 40-step trajectory after the fact?
 
 </details>
@@ -405,6 +558,20 @@ The things worth saying out loud:
 **Quality lever.** Domain vocabulary matters more than WER. Bias the decoder with account-specific terms where the engine supports it, or run a post-ASR correction pass giving an LLM the candidate entity list (product names, agent names, plan tiers) and let it repair the transcript.
 
 **PII.** Redact before it reaches the LLM stage or the index, not after. Recordings contain card numbers read aloud.
+
+**Worth sketching.** The channel-separation branch near the top is the cheapest win in the whole pipeline, and drawing it stops you designing around a problem you do not have.
+
+```mermaid
+flowchart TD
+    A["Call recording"] --> B["Resample to 16 kHz,<br/>split channels, VAD"]
+    B --> C["ASR with word-level timestamps"]
+    C --> D{"Stereo, one party<br/>per channel?"}
+    D -->|"yes"| E["Channels are<br/>ground-truth speakers"]
+    D -->|"no"| F["Diarisation, then align<br/>to word boundaries"]
+    E --> G["Redact PII"]
+    F --> G
+    G --> H["LLM summary and extraction,<br/>then index"]
+```
 
 **Follow-ups:** How would you evaluate this pipeline end to end when you have no reference transcripts for your own calls? Where would you put a human in the loop, given the volume?
 
@@ -430,6 +597,19 @@ What does not work: a system prompt saying "never follow instructions found in i
 
 The concrete red flag to name: a document-processing agent that loops over an inbox and also holds an email-sending tool is a fully automated exfiltration path. The injected instruction arrives, gets read, and gets executed with your credentials, and nothing in the trace looks anomalous.
 
+**Worth sketching.** Two boxes with a schema between them is the whole defence, and drawing it proves you are containing the model rather than instructing it.
+
+```mermaid
+flowchart LR
+    A["Untrusted image:<br/>screenshot or PDF"] --> B["Reader model,<br/>no tools at all"]
+    B --> C["JSON matching your schema:<br/>send an email is not expressible"]
+    C --> D["Planner model,<br/>holds the tools"]
+    D --> E{"Side-effectful action?"}
+    E -->|"yes"| F["Human confirms the<br/>actual argument values"]
+    E -->|"no"| G["Execute"]
+    F --> G
+```
+
 **Follow-ups:** How would you test this? Design a red-team suite for image-borne injection. If the business insists the agent must both read attachments and reply to emails, what is the minimum viable containment?
 
 </details>
@@ -454,6 +634,19 @@ Also verify the ASR is not the real culprit: many pipelines wait for a "final" t
 
 Measure false-interruption rate and median response gap per turn. A p50 end-to-end latency number hides both failures.
 
+**Worth sketching.** It reframes the problem from one timeout value to a branch, which is the reframing the question is really testing.
+
+```mermaid
+flowchart TD
+    A["Streaming ASR partial"] --> B{"Utterance semantically<br/>complete?"}
+    B -->|"yes"| C["Silence threshold<br/>~200-400 ms"]
+    B -->|"no, mid-sentence"| D["Silence threshold<br/>~1.5-2 s"]
+    C --> E{"User resumed<br/>before it elapsed?"}
+    D --> E
+    E -->|"yes"| A
+    E -->|"no"| F["Commit the turn,<br/>run the LLM"]
+```
+
 **Follow-ups:** How would you collect labelled data to train a semantic turn detector for your domain? Speculative generation wastes tokens on cancellation - how would you decide whether it is worth it?
 
 </details>
@@ -471,6 +664,20 @@ Three architectures, in ascending fidelity:
 3. **Screenshot-based retrieval (ColPali)**: skip parsing entirely. A VLM (PaliGemma in the original paper) encodes each **page image** into ~1k patch-level embeddings; queries encode into token-level embeddings; scoring is ColBERT-style **late interaction** - for each query token, take the max similarity over the page's patch vectors, and sum. Because matching happens at patch granularity, a query about "the latency graph" can match the actual chart region without anyone having described it. On visually-rich document benchmarks (ViDoRe) this beats OCR-based pipelines significantly. Costs: **multi-vector storage** (~1k vectors per page, and 50k PDFs can easily mean a million pages - mitigated by pooling and binary quantization, but real), ingestion GPU time, and answer-time cost since retrieved evidence is page *images* the generator VLM must read (~1-2k tokens per page).
 
 My design for 50k PDFs: hybrid. Text-chunk retrieval and ColPali-style page retrieval run in parallel, fused (RRF), with retrieved pages rendered to the VLM as images alongside top text chunks. Cite page numbers with thumbnail provenance. Evaluate retrieval (recall@k on a labelled query set, checking specifically that figure-dependent questions retrieve the right pages) separately from generation faithfulness.
+
+**Worth sketching.** The parallel legs make the point that ColPali is a retrieval path, not a replacement for the text stack, and that the generator still reads page images.
+
+```mermaid
+flowchart TD
+    A["50k PDFs"] --> B["Parsed text chunks,<br/>embedded"]
+    A --> C["Page images,<br/>~1k patch vectors each"]
+    D["User query"] --> B
+    D --> C
+    B --> E["Fuse ranked lists, RRF"]
+    C --> E
+    E --> F["Top page images plus<br/>top text chunks"]
+    F --> G["Generator VLM,<br/>cites page numbers"]
+```
 
 **Follow-ups:** How do you keep multi-vector storage from exploding at 5M pages? When is caption-and-embed strictly better than ColPali? How do you evaluate whether chart-dependent questions are actually being answered from the chart?
 
@@ -614,6 +821,20 @@ The move that matters in 2026 is not "think longer", it is **think with tools**.
 
 And measure it on your own data. On many pure-extraction workloads, reasoning mode costs several times more and buys nothing, because those tasks were never reasoning-bound.
 
+**Worth sketching.** Drawing the exit conditions answers the obvious follow-up before it is asked: what stops the loop, and what happens when the budget runs out.
+
+```mermaid
+flowchart TD
+    A["Page or screenshot"] --> B["One cheap single pass"]
+    B --> C{"Validation rule or<br/>confidence check fails?"}
+    C -->|"no"| D["Accept the extraction"]
+    C -->|"yes"| E["Crop and re-encode the<br/>region at high resolution"]
+    E --> F["Look again, run code<br/>on the numbers"]
+    F --> G{"Tool-step budget left?"}
+    G -->|"yes"| C
+    G -->|"no"| H["Abstain, route to review"]
+```
+
 **Follow-ups:** How would you build the crop-and-zoom tool loop, and what stops it looping forever? Given a fixed budget, would you spend it on more image tokens or more reasoning tokens - how do you decide empirically?
 
 </details>
@@ -663,6 +884,18 @@ What to look at, in order:
 **4. Right-size the model.** A 7B-class VLM at high resolution frequently beats a much larger one at low resolution on document tasks, because the binding constraint is perception, not reasoning. Test it rather than assuming bigger is better.
 
 **5. Then the usual.** Quantization (less of the story here than for decode-bound serving), tensor-parallel sizing, and honest measurement: GPU utilisation percentage lies, so track tokens/s/GPU against a roofline estimate.
+
+**Worth sketching.** It shows the interviewer you know exactly where the bottleneck sits, and that the encoder is a compute stage of its own rather than part of prefill.
+
+```mermaid
+flowchart LR
+    A["Page image"] --> B["ViT over N tiles"]
+    B --> C["LLM prefill,<br/>~1-2k visual tokens"]
+    C --> D["Decode ~200 JSON tokens"]
+    D --> E["Continuous batching and<br/>speculative decoding help only here"]
+    B --> F["Encoder and prefill serialised<br/>on one GPU, neither batches"]
+    F --> G["Fix: separate encoder and decoder<br/>pools, cut the pixel budget"]
+```
 
 **Follow-ups:** How would you decide the pixel budget per document class rather than globally? Walk me through what changes if the workload shifts to one question per image with no reuse.
 

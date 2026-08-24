@@ -94,7 +94,7 @@ sequenceDiagram
     QP->>CB: chunks + conversation history
     CB->>M: assembled prompt (~7k tokens)
     M-->>U: streamed answer (TTFT < 2s)
-    Note over U,M: citation verifier runs as the stream completes;<br/>trace written asynchronously
+    Note over U,M: citation verifier runs as the stream completes,<br/>trace written asynchronously
 ```
 
 ## Component deep-dives

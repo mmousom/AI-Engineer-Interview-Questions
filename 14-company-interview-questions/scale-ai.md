@@ -273,6 +273,55 @@ The meta-skill being tested: converting an ambiguous, oversized ask into a shipp
 
 </details>
 
+### 11. We sell RL environments. Design one for the task "book a multi-city trip in a web travel app", specify the reward, and tell me how you stop the policy hacking it.
+
+<details><summary><b>Answer</b></summary>
+
+An environment is a seeded, resettable snapshot of a system, not a prompt. Concretely: a container holding the app, its database at a known initial state, and the tool or browser surface the agent acts through. An episode is (seed, instruction, verifier). Reset has to be exact, or runs are not comparable and neither training nor evaluation is reproducible.
+
+Reward comes from system state, never from the agent's own report. The outcome verifier diffs the booking database after the episode: three segments in the right order, dates matching the request, one PNR, total under the stated budget, no orphaned holds. That is the RLVR shape, a programmatic check on real state change, which is how Scale's own RL Environments material frames it - expert-designed verifiers over measurable changes in the system. Pure binary outcome reward across a 40-step episode gives dreadful credit assignment, so add process verifiers for partial credit: correct dates searched, no double-booking, no destructive action.
+
+Reward hacking is the policy attacking the verifier instead of the task. Expect writes through a debug endpoint that bypass the booking API, cancel-and-rebook loops that flip a "confirmed" flag, a payment mock accepting any token, and text stuffing if an LLM judge contributes to reward. Defences: score invariants rather than only the goal predicate (a side-effect ledger proving no writes outside the sanctioned surface), randomise mock names and ids so memorisation is not rewarded, cap the reward share of any judged component, and hand-audit the top-reward trajectories every run. That is where exploits live, and nowhere else.
+
+The training-to-production gap is the other failure. Mocks are too clean, so inject latency, rate limits, pagination, stale inventory and partial failures, then measure the gap: score replayed production traces with the same verifier. An 85% environment pass rate against 45% on replay means you are teaching the wrong skill.
+
+**Worth sketching.** The loop, and the point where the exploit audit feeds back into the environment rather than the policy.
+
+```mermaid
+flowchart LR
+    A["Seeded task<br/>+ app snapshot"] --> B["Agent policy"]
+    B --> C["Environment<br/>(app state, tools)"]
+    C --> D["Outcome verifier<br/>(state diff)"]
+    D --> E["Process verifier<br/>(partial credit)"]
+    E --> F["Reward"]
+    F --> B
+    F --> G["Audit top-reward<br/>trajectories"]
+    G --> H["Patch exploit,<br/>version environment"]
+    H --> C
+```
+
+**Follow-ups:** Training reward is climbing while the held-out replay score is flat - what do you check first? How do you decide a task belongs in an RL environment at all, rather than in an SFT set?
+
+</details>
+
+### 12. A robotics customer asks for 50,000 hours of manipulation demonstrations across 12 tasks and three robot embodiments. Design the collection and data pipeline, and tell me what makes a single demonstration worth keeping.
+
+<details><summary><b>Answer</b></summary>
+
+Name the constraint first: this data cannot be scraped. It is produced one interaction at a time, which is why the public corpora (DROID, Open X-Embodiment) come to roughly 5,000 hours combined on Scale's own physical-AI writeup, and why Scale built physical collection operations - a prototyping lab plus a distributed contributor network - rather than an ingestion pipeline. So this is a factory design problem with a data pipeline attached.
+
+**Collection.** Teleoperated cells (leader-follower arms or VR controllers) as the primary source, with scripted autonomous rollouts for cheap variation on already-solved sub-tasks. Per episode, capture synchronised multi-view RGB (wrist plus third-person), depth where the rig has it, joint positions and torques at control rate, gripper state, and the language instruction. The unglamorous hard part is time sync: cameras and controller sit on different clocks, so hardware-timestamp every stream and record the offsets. Tens of milliseconds of drift between video and actions quietly wrecks behaviour cloning and shows up in no dashboard.
+
+**Diversity is the deliverable, not hours.** Fifty thousand hours of the same tabletop pick is worth less than five thousand stratified across objects, initial poses, lighting, backgrounds, distractors and operators. Keep a coverage matrix of task x embodiment x condition and route collection into the empty cells, otherwise operators optimise for throughput and you buy a very expensive mode collapse.
+
+**Keep criteria.** Success is table stakes. Also require no teleop dropouts or frame gaps, kinematically valid replay on the target embodiment, and an instruction that matches what actually happened - mislabelled intent is the commonest silent defect. Deliberately retain a labelled share of failures and recoveries, because a policy that has never seen a missed grasp cannot recover from one.
+
+**Quality gates**, cheapest first: automated checks (sync gaps, dropped frames, force spikes, out-of-workspace poses), human review on a sample, then the only test that settles arguments - fine-tune a reference policy per batch and check a held-out real-robot eval moves. Ship per-episode provenance: rig, operator, calibration, firmware.
+
+**Follow-ups:** The customer's policy gets worse after your third batch - how do you establish whether your data caused it? What changes when two of the three embodiments have different gripper kinematics?
+
+</details>
+
 ## How to prepare
 
 **Repo deep-dives, in priority order:**
@@ -305,5 +354,7 @@ The meta-skill being tested: converting an ambiguous, oversized ask into a shipp
 - https://scale.com/blog/scale-ai-announces-next-phase-of-company-evolution (Meta investment / leadership announcement)
 - https://techcrunch.com/2025/06/13/scale-ai-confirms-significant-investment-from-meta-says-ceo-alexandr-wang-is-leaving/
 - https://techcrunch.com/2025/08/29/cracks-are-forming-in-metas-partnership-with-scale-ai/
+- https://scale.com/rlenvironments and https://scale.com/blog/rl-environments (Scale RL Environments: verifiers, tool-use and computer-use environments)
+- https://scale.com/physical-ai and https://scale.com/blog/physical-ai (Data Engine for Physical AI: robotics collection and enrichment)
 - https://labs.scale.com/leaderboard (SEAL leaderboards)
 - https://scale.com/blog/leaderboard (SEAL leaderboards announcement)

@@ -2,6 +2,12 @@
 
 45 questions: 12 basic, 20 intermediate, 13 advanced.
 
+> **On the diagrams: drawing is optional.** Some answers include a small sketch you could
+> reproduce on a whiteboard or in a shared doc. You never have to draw anything to score well,
+> and a clear spoken answer stands on its own. But in architecture, pipeline, and system design
+> questions, sketching while you talk keeps the interviewer with you and shows you can structure
+> a problem. Treat these as good to have, not as homework.
+
 ## Basic
 
 ### 1. What's the difference between zero-shot and few-shot prompting, and when would you use each?
@@ -20,6 +26,22 @@ Few-shot earns its token cost in specific situations:
 When few-shot is a bad idea: tasks the model already does well zero-shot (you're paying tokens for nothing), reasoning-heavy tasks on reasoning models (canned CoT examples can constrain or degrade their internal reasoning), and highly diverse inputs where any small example set biases the model toward the examples' surface features. Also remember examples are strong implicit instructions: if all your sentiment examples are one sentence long, the model will start truncating its analysis to one sentence.
 
 A practical middle ground is dynamic few-shot: retrieve the k most similar labelled examples per request from an example store instead of hardcoding a static set. It usually beats static few-shot, at the cost of infrastructure and cache misses (examples now vary per request, breaking prefix caching).
+
+**Worth sketching.** It reframes the question as a diagnosis rather than a preference, which is what the interviewer is listening for.
+
+```mermaid
+flowchart TD
+    A["New task"] --> B{"Zero-shot already<br/>passes the eval?"}
+    B -->|"yes"| C["Ship zero-shot"]
+    B -->|"no"| D{"What is failing?"}
+    D -->|"output shape"| E["Few-shot for<br/>format anchoring"]
+    D -->|"label boundary"| F["Few-shot on<br/>borderline cases"]
+    D -->|"reasoning depth"| G["Reasoning budget,<br/>not examples"]
+    E --> H{"Inputs highly diverse?"}
+    F --> H
+    H -->|"yes"| I["Dynamic few-shot,<br/>pay the cache miss"]
+    H -->|"no"| J["Static set inside<br/>the cached prefix"]
+```
 
 **Follow-ups:** How many examples is typically enough before returns diminish? How would you measure whether few-shot is actually helping versus just adding tokens? Why can few-shot CoT examples hurt a reasoning model?
 
@@ -63,6 +85,19 @@ When it's actively the wrong tool: **reasoning models** (OpenAI o-series, Claude
 
 Practical engineering detail: if you need structured output *and* CoT, order matters - have the model reason first, then emit the answer (e.g., a `reasoning` field before the `answer` field in the schema). Answer-then-justify forfeits the benefit because the answer tokens are already sampled.
 
+**Worth sketching.** The two branch points are the whole answer: does the task need scratch paper, and is the model already trained to produce it.
+
+```mermaid
+flowchart TD
+    A["Task"] --> B{"Would a human<br/>need scratch paper?"}
+    B -->|"no"| C["Answer directly,<br/>no CoT tokens"]
+    B -->|"yes"| D{"Reasoning model?"}
+    D -->|"yes"| E["Raise the thinking budget,<br/>drop CoT exemplars"]
+    D -->|"no"| F["Elicit reasoning<br/>in the prompt"]
+    F --> G["reasoning field first"]
+    G --> H["answer field last"]
+```
+
 **Follow-ups:** How would you decide empirically whether CoT is worth the latency for a given task? What does it mean for a chain of thought to be "unfaithful"? How does CoT relate to test-time compute scaling?
 
 </details>
@@ -82,6 +117,16 @@ Why it matters in interviews (beyond trivia):
 - Its obsolescence is instructive: instruction-tuned models increasingly do this unprompted, and reasoning models internalised the entire behaviour via RL post-training. Zero-shot CoT is the bridge fossil between "prompt hacks" and "test-time compute as a trained, budgeted capability."
 
 A strong answer also flags the failure mode: on trivial tasks the phrase produces verbose faux-deliberation, adding latency and occasionally talking the model out of a correct instinct.
+
+**Worth sketching.** Drawing the two sampling passes shows you know the original recipe, not just the famous phrase.
+
+```mermaid
+flowchart LR
+    A["Question"] --> B["Append the trigger:<br/>Let's think step by step"]
+    B --> C["Pass 1 samples<br/>a reasoning trace"]
+    C --> D["Append<br/>Therefore, the answer is"]
+    D --> E["Pass 2 samples<br/>a clean parseable answer"]
+```
 
 **Follow-ups:** If a phrase can unlock accuracy, how would you search for better phrases systematically? Why do you think RL-trained reasoning made this trick obsolete? Would you ever still use it in 2026 - where?
 
@@ -165,6 +210,18 @@ Two things candidates get wrong. First, "temperature equals creativity" is a bad
 
 Do not aggressively tune temperature and top_p at the same time. Pick one as your primary knob, usually temperature, and leave the other at its neutral value so you can attribute changes.
 
+**Worth sketching.** Putting the two knobs on either side of the softmax makes it obvious that one changes shape and the other changes the candidate pool.
+
+```mermaid
+flowchart LR
+    A["Logits"] --> B["Divide by temperature<br/>reshapes the distribution"]
+    B --> C["Softmax"]
+    C --> D["top_p keeps the smallest set<br/>reaching cumulative p"]
+    D --> E["Renormalise"]
+    E --> F["Sample one token"]
+    B -->|"T = 0"| G["Greedy argmax,<br/>pool of one"]
+```
+
 **Follow-ups:** Why does temperature 0 not guarantee identical outputs across identical requests? If you had to raise diversity without raising error rate, what would you change instead of temperature?
 
 </details>
@@ -242,6 +299,20 @@ Design points worth raising:
 
 And measure them: every guardrail has a false positive rate that shows up as a broken product.
 
+**Worth sketching.** The third box is the point: it shows why input and output checks alone still leave a tool call unguarded.
+
+```mermaid
+flowchart LR
+    A["Request"] --> B["Input checks:<br/>PII, scope, injection patterns"]
+    B -->|"blocked"| C["Refuse, model never called"]
+    B -->|"pass"| D["Model"]
+    D --> E["Tool call"]
+    E --> F["Action gate:<br/>authorisation in code"]
+    D --> G["Output checks:<br/>schema, groundedness, leakage"]
+    G -->|"fail"| H["Retry or block"]
+    G -->|"pass"| I["User"]
+```
+
 **Follow-ups:** How would you keep an output guardrail from destroying your streaming latency? What false-positive rate would you accept on an off-topic classifier, and how would you measure it?
 
 </details>
@@ -262,6 +333,18 @@ The standard strategies, roughly in order of sophistication:
 The move that actually fixes the reported symptom is different from all four: **extract durable state into a structured object and re-render it every turn**. The user's name, their constraints, decisions already made, the current task. A ~200 token `<session_state>` block at a stable position beats hoping the model re-reads turn 3 of a 40-turn transcript. It also makes the state inspectable and testable, which a transcript never is.
 
 Summarisation is lossy in an adversarial way: the detail you dropped is the one the next turn needed. So keep recent turns verbatim, and never summarise the current user request.
+
+**Worth sketching.** Draw the assembled prompt top to bottom and the state block stops sounding like a fifth strategy and starts looking like a separate lane.
+
+```mermaid
+flowchart TD
+    A["System prompt"] --> B["Running summary<br/>of older turns"]
+    B --> C["session_state:<br/>facts, constraints, decisions"]
+    C --> D["Last N turns verbatim"]
+    D --> E["Current user turn"]
+    F["State extractor<br/>runs every turn"] --> C
+    G["Compaction at a threshold,<br/>in large chunks"] --> B
+```
 
 **Follow-ups:** Where would you place the summary and the recent turns to keep prefix caching effective? What breaks when you summarise a conversation that contains tool calls and their results?
 
@@ -326,6 +409,21 @@ Cost analysis is where interviewers separate candidates: it's a linear k× multi
 
 The 2026 framing: self-consistency is the simplest form of **test-time compute scaling** - the same axis as reasoning models' long internal deliberation, best-of-n with verifiers, and MCTS-style search. Reasoning models have internalised much of the benefit, so the marginal gain from external voting on top of them is smaller - measure before paying k×.
 
+**Worth sketching.** The fan-out draws the k-times cost for free, and the vote split doubles as the confidence signal you can route on.
+
+```mermaid
+flowchart LR
+    A["One prompt,<br/>temperature above 0"] --> B["Chain 1"]
+    A --> C["Chain 2"]
+    A --> D["Chain k"]
+    B --> E["Extract short answer"]
+    C --> E
+    D --> E
+    E --> F{"Vote spread"}
+    F -->|"9 of 10 agree"| G["Return with<br/>high confidence"]
+    F -->|"4 / 3 / 3 split"| H["Escalate to human<br/>or stronger model"]
+```
+
 **Follow-ups:** How would you apply the idea to code generation where outputs are long? Design an adaptive scheme that spends more samples only on hard inputs. Why do errors tend to be uncorrelated across samples - and when would that assumption break?
 
 </details>
@@ -364,6 +462,19 @@ Original implementation detail worth knowing: it was pure prompting - few-shot e
 Relation to modern tool calling: native function calling (OpenAI tools, Anthropic tool use, MCP-served tools) is ReAct with the structure enforced by the API and training rather than by regex. The model emits a typed, schema-validated tool call; the runtime executes it and returns a structured result message; the loop continues. The "Thought" step became either the visible text preceding a tool call or the internal reasoning of thinking models - some APIs support explicit reasoning/thinking blocks interleaved with tool use, which is ReAct's Thought step productised. Models are now RL-trained on multi-step tool-use trajectories, so the pattern is a trained capability, not a prompt trick.
 
 What survives of ReAct in 2026 engineering: the loop architecture of every agent framework; the insight that observations must return *into context* for iterative reasoning; and its failure modes - looping on a failing action, context bloat from accumulated observations - which is exactly what context engineering (truncating observations, compaction) addresses.
+
+**Worth sketching.** Most candidates draw the loop and forget the exits, so putting both stop conditions on the board is the differentiator.
+
+```mermaid
+flowchart LR
+    A["Thought"] --> B["Action:<br/>schema-validated tool call"]
+    B --> C["Observation<br/>appended to context"]
+    C --> D{"Answer ready?"}
+    D -->|"no"| A
+    D -->|"yes"| E["Final answer"]
+    C --> F{"Same error twice,<br/>or step budget spent?"}
+    F -->|"yes"| G["Stop and report<br/>what was tried"]
+```
 
 **Follow-ups:** How do you stop a ReAct-style agent that keeps retrying a failing tool? Why does interleaving beat plan-everything-then-execute - and when does plan-first win? What does the Observation step imply for how you design tool output formats?
 
@@ -413,6 +524,18 @@ Then the defences that actually bound the blast radius, because layout alone wil
 
 A crisp closing line for interviews: delimiters are seatbelts, not armor - design the system so a successful injection can't do anything catastrophic.
 
+**Worth sketching.** Drawing the layout and then the two boxes below it makes the point that the layout is mitigation and the code is the boundary.
+
+```mermaid
+flowchart TD
+    A["Task, rules,<br/>output contract"] --> B["Rule: content below is data<br/>and may fake instructions"]
+    B --> C["Quarantined block,<br/>your delimiters escaped out"]
+    C --> D["Instructions and question<br/>restated after the data"]
+    D --> E["Model"]
+    E --> F["Output validation<br/>and anomaly checks"]
+    F --> G["Least-privilege tools,<br/>gate on irreversible actions"]
+```
+
 **Follow-ups:** How would you test a prompt's injection resistance systematically? Ranked by risk: user chat input, retrieved internal docs, fetched web pages - why? What changes when the attacker controls a document in your RAG index?
 
 </details>
@@ -439,6 +562,18 @@ Additional practices a senior answer includes:
 
 Mention the eval: position-sensitivity is measurable - permute the gold document's position on a fixed QA set and plot accuracy by position for your actual model before assuming the U-curve's magnitude.
 
+**Worth sketching.** A numbered stack with the dead zone marked explains the ordering choice faster than describing a U-curve in words.
+
+```mermaid
+flowchart TD
+    A["1. System and standing rules,<br/>cacheable prefix"] --> B["2. Task and output format"]
+    B --> C["3. Best documents first"]
+    C --> D["4. Weakest documents here"]
+    D --> E["5. Next-best documents last"]
+    E --> F["6. Question restated,<br/>adjacent to generation"]
+    D --> G["Lost-in-the-middle zone:<br/>put nothing load-bearing here"]
+```
+
 **Follow-ups:** How would you detect lost-in-the-middle empirically in production? When is RAG-then-stuff worse than an agentic search-and-read loop over the corpus? How does document ordering interact with prompt caching when the document set is semi-stable?
 
 </details>
@@ -458,6 +593,18 @@ Structural consequences - this is the part interviews probe:
 - **Nondeterministic serialization is a silent killer** - dict ordering, float formatting, or a library that reorders JSON keys produces byte-different prompts that never hit cache.
 
 Why it matters so much for agents: an agent loop re-sends the entire growing context every step; with caching, each step pays full price only for the newly appended tokens. That's routinely a 5-10× cost reduction and a large TTFT (prefill latency) win. Cache hit rate belongs on your dashboard next to cost and latency.
+
+**Worth sketching.** The lower branch is the one that wins the question: it shows exactly what a single injected timestamp costs you.
+
+```mermaid
+flowchart LR
+    A["System prompt"] --> B["Tool schemas"]
+    B --> C["Few-shot block"]
+    C --> D["History, append only"]
+    D --> E["Per-request query"]
+    D --> F["Breakpoint: reuse the KV cache,<br/>prefill only new tokens"]
+    G["One volatile token<br/>anywhere in the prefix"] --> H["Everything after it<br/>re-prefills at full price"]
+```
 
 **Follow-ups:** Dynamic few-shot retrieval versus static examples - how does caching change that calculus? Where would you place breakpoints in a multi-tenant agent with shared tools but per-user memory? Your cache hit rate dropped to near zero after a deploy - what do you look for?
 
@@ -482,6 +629,21 @@ The process is an empirical loop, and it starts with measurement, not rewriting.
 **6. Ship carefully.** Offline win → shadow or canary with online guardrail metrics, because eval sets never fully match production distribution.
 
 The differentiating signal in this answer is the order: eval → failure analysis → single-variable iteration. Candidates who start with "I'd add better wording" fail this question.
+
+**Worth sketching.** The loop back from the regression check is what separates this from "I would reword it and see."
+
+```mermaid
+flowchart TD
+    A["Build the eval set:<br/>30 to 200 real cases"] --> B["Score the baseline"]
+    B --> C["Bucket failures: format,<br/>reasoning, ignored, ungrounded"]
+    C --> D["Change one variable"]
+    D --> E["Re-run the whole suite"]
+    E -->|"target bucket up,<br/>others flat"| F["Keep it, log the score"]
+    E -->|"regressed elsewhere"| D
+    F --> G{"Scores plateaued?"}
+    G -->|"yes"| H["Escalate: structure, model,<br/>retrieval, then tuning"]
+    G -->|"no"| I["Shadow, then canary"]
+```
 
 **Follow-ups:** How do you eval open-ended generation where there's no single right answer? Your prompt scores 95% offline but users complain - what's broken? How do you keep the eval set from going stale?
 
@@ -573,6 +735,19 @@ The part that is a real engineering commitment: **the store is a dataset**. It d
 
 And measure it. Dynamic few-shot has to beat static few-shot, which has to beat zero-shot, on your eval. On instruction-tuned models, often it does not, and you have built infrastructure for nothing.
 
+**Worth sketching.** Two stages between retrieval and rendering are where the quality lives, and the curation lane shows you treat the store as a dataset.
+
+```mermaid
+flowchart LR
+    A["Incoming input"] --> B["Embed"]
+    B --> C["Top 50 by similarity"]
+    C --> D["MMR: relevance<br/>versus diversity"]
+    D --> E["Balance labels"]
+    E --> F["Render k examples<br/>after the cached prefix"]
+    G["Reviewed production<br/>failures"] --> H["Curated, versioned store"]
+    H --> C
+```
+
 **Follow-ups:** How would you keep a mislabelled example from silently degrading production? When would bucketed static examples beat true per-request retrieval?
 
 </details>
@@ -596,6 +771,18 @@ For genuinely large results, offload: write the payload to a file or artifact st
 
 The security point that belongs here: tool results are untrusted content. A web-fetch or email-read result can contain text aimed at your model. Delimit it, mark it as data, and remember the delimiter is a mitigation, not a boundary.
 
+**Worth sketching.** It shows a formatting layer between the API and the model, which is the thing most teams simply do not have.
+
+```mermaid
+flowchart LR
+    A["Raw API payload"] --> B["Allowlist fields,<br/>flatten, drop nulls"]
+    B --> C{"Still large?"}
+    C -->|"no"| D["Return compact result"]
+    C -->|"tabular"| E["Page 1 of n plus<br/>how to fetch the rest"]
+    C -->|"blob"| F["Write to store, return<br/>a handle and a summary"]
+    G["Tool error"] --> H["Actionable message:<br/>field, expected, got"]
+```
+
 **Follow-ups:** How would you decide the truncation limit for a given tool? Why is a paginated result better than a truncated one for an agent, given both hide data?
 
 </details>
@@ -618,6 +805,20 @@ When it pays: you are prefill-latency bound, you are token-cost bound on a conte
 When it does not: **if your long prefix is stable, prompt caching beats compression on every axis.** Cache reads run at a fraction of input price with zero quality risk. Compression trades quality for cost; caching does not. Candidates who reach for compression before checking cacheability are optimising the wrong thing.
 
 The risk is that compression is lossy adversarially: the token you dropped is the answer. It is most dangerous on extraction and exact-detail tasks, safest on background and history. So never compress the user's actual instruction or the output contract, only the background. And measure it as a frontier: quality on your eval against tokens saved, not tokens saved alone.
+
+**Worth sketching.** The two gates before any compression happens are the answer, and drawing them stops you sounding keen to compress.
+
+```mermaid
+flowchart TD
+    A["Context is too big"] --> B{"Curation done: chunks,<br/>tools, dead examples?"}
+    B -->|"no"| C["Cut the obvious waste,<br/>zero quality risk"]
+    B -->|"yes"| D{"Is the long prefix stable?"}
+    D -->|"yes"| E["Cache it, compression<br/>loses on every axis"]
+    D -->|"no"| F{"What is actually in there?"}
+    F -->|"documents"| G["Retrieve fewer,<br/>do not compress"]
+    F -->|"history, background"| H["Summarise, or<br/>token-level compression"]
+    F -->|"instructions, contract"| I["Never compress"]
+```
 
 **Follow-ups:** Why might token-level compression hurt an extraction task more than a summarisation task? How would you decide between compressing history and offloading it to a file?
 
@@ -702,6 +903,20 @@ Asking the model why it did something is a useful diagnostic and terrible eviden
 
 Only then do I change something, one thing, and re-run the whole eval set rather than the single case. Fixing the reported case while regressing four others is the default outcome otherwise.
 
+**Worth sketching.** The variance branch is the one interviewers wait for, because it decides whether prompt wording is even the right lever.
+
+```mermaid
+flowchart TD
+    A["Bad answer reported"] --> B["Pull rendered prompt,<br/>model, params, doc ids, tool calls"]
+    B --> C{"Was the answer<br/>ever in the context?"}
+    C -->|"no"| D["Retrieval failure,<br/>not a prompt bug"]
+    C -->|"yes"| E["Re-run it five times"]
+    E -->|"fails 1 of 5"| F["Distribution problem: constrain,<br/>validate, lower temperature"]
+    E -->|"fails 5 of 5"| G["Bisect documents,<br/>examples, rule list"]
+    G --> H["Minimal reproduction"]
+    H --> I["One change,<br/>then the full eval set"]
+```
+
 **Follow-ups:** How would you tell context rot apart from a retrieval failure from a trace? What do you do when the failure only reproduces at 1 in 50?
 
 </details>
@@ -752,6 +967,19 @@ Tradeoffs a senior answer must include:
 
 Rule of thumb: constrained decoding for anything a program parses; JSON-mode-plus-validation only when you need schema features strict mode doesn't support.
 
+**Worth sketching.** Putting the mask before the softmax is the whole mechanism, and it explains both the no-retry guarantee and the distribution shift in one picture.
+
+```mermaid
+flowchart LR
+    A["JSON Schema"] --> B["Compile to a grammar:<br/>FSM or pushdown"]
+    B --> C["Grammar state at step t"]
+    C --> D["Mask every token that<br/>cannot continue, to minus infinity"]
+    D --> E["Softmax and sample"]
+    E --> F["Advance the state"]
+    F --> C
+    E --> G["Valid by construction,<br/>no validate-and-retry loop"]
+```
+
 **Follow-ups:** Why can constrained decoding change output *distribution*, not just filter invalid outputs? How would you implement constrained decoding for a non-JSON DSL? Function-calling arguments vs. structured output - when to use which?
 
 </details>
@@ -771,6 +999,19 @@ Compaction and hygiene strategies, roughly in order of adoption:
 - **Pruning**: drop superseded tool results (old file reads after edits), collapse retry loops to a single "attempts 1-3 failed because X" note, remove tools no longer relevant to the phase.
 
 Name the cache tension: compaction rewrites the prefix and invalidates the prompt cache, so compact at deliberate breakpoints and accept the one-time re-prefill cost - not continuously.
+
+**Worth sketching.** The threshold and the re-prefill box together explain why compaction is a deliberate event rather than something you do every turn.
+
+```mermaid
+flowchart LR
+    A["Agent step"] --> B["Tool output truncated,<br/>paginated, boilerplate stripped"]
+    B --> C{"Past the quality<br/>threshold, not the limit?"}
+    C -->|"no"| A
+    C -->|"yes"| D["Digest: decisions, state,<br/>open items, errors already hit"]
+    D --> E["Recent turns and pinned<br/>artifacts stay verbatim"]
+    E --> F["One re-prefill,<br/>cache rebuilt from here"]
+    F --> A
+```
 
 **Follow-ups:** How do you *detect* context rot with metrics rather than vibes? What must a compaction summary preserve for a coding agent specifically? Why can keeping failed attempts in context be valuable, and how do you keep them without amplifying self-conditioning?
 
@@ -842,6 +1083,21 @@ Decision framework, in the order the checks should run:
 **Then check prerequisites and price in the real costs.** You need roughly 500-5,000+ quality examples (LoRA-style tuning makes compute cheap; *data* is the bottleneck), an eval you trust, and an MLOps commitment: you now own a model artifact - retraining when the base model deprecates, regression testing, versioned deployment, and drift monitoring. Fine-tuning can also narrow general capability and instruction-following outside the tuned distribution, and it resets every time you want the newest base model - whereas a good prompt ports across models in an afternoon.
 
 Rule of thumb: prompt for capability and knowledge, fine-tune for consistency, format, style, and distillation economics - and only after the eval says prompting has plateaued.
+
+**Worth sketching.** Classifying the failure before the prerequisites gate is the shape of the answer, and three of the four branches never reach fine-tuning.
+
+```mermaid
+flowchart TD
+    A["Eval has plateaued"] --> B{"What kind of failure?"}
+    B -->|"missing facts"| C["Retrieval or tools,<br/>weights forget and go stale"]
+    B -->|"capability absent"| D["Stronger base model"]
+    B -->|"style, format,<br/>consistency"| E["Fine-tuning: the sweet spot"]
+    B -->|"big model too slow<br/>or too costly"| F["Distil into a small model"]
+    E --> G{"500+ clean examples<br/>and an eval you trust?"}
+    F --> G
+    G -->|"no"| H["Keep prompting"]
+    G -->|"yes"| I["You now own<br/>a model artifact"]
+```
 
 **Follow-ups:** Why is fine-tuning unreliable for knowledge injection, mechanistically? How would you build the fine-tuning dataset from production traffic without licensing or privacy problems? What would make you *undo* a fine-tune and go back to prompting?
 
@@ -929,6 +1185,24 @@ That last line is the point most candidates miss. **Emit per-component token cou
 
 Two interactions worth flagging: order components stable to volatile so the cache prefix is long, and recognise that compaction is a cache-invalidation event, so compact in big chunks rather than every turn.
 
+**Worth sketching.** The first arrow is the one worth pausing on: the budget is not the window, and everything downstream is divided out of the smaller number.
+
+```mermaid
+flowchart TD
+    A["200k window"] --> B["Usable budget: where the<br/>quality curve bends"]
+    B --> C["System and tools, 5k"]
+    B --> D["Session state, 2k"]
+    B --> E["Retrieved documents, 25k"]
+    B --> F["History, 50k"]
+    B --> G["Tool results, remainder"]
+    B --> H["Output reserve, 15%"]
+    C --> I["One ContextBuilder:<br/>cap, degrade, emit token counts"]
+    D --> I
+    E --> I
+    F --> I
+    G --> I
+```
+
 **Follow-ups:** How would you find the quality-versus-context-length curve for your agent? Why does chars/4 break as a token estimate, and where does it break worst?
 
 </details>
@@ -977,6 +1251,19 @@ For this agent, in order of leverage:
 
 Enforcement lives in code at the tool boundary. The prompt is defence in depth, never the boundary. And a candidate who says they have solved injection has told you they do not understand it.
 
+**Worth sketching.** Three legs into one box, then the cuts hanging off it: it makes "bound the blast radius" concrete instead of a slogan.
+
+```mermaid
+flowchart TD
+    A["Private data access"] --> D["All three together<br/>is the disaster"]
+    B["Untrusted content:<br/>fetched pages, inbound mail"] --> D
+    C["Exfil channel: send-email,<br/>arbitrary URLs, image src"] --> D
+    D --> E["Cut the exfil leg:<br/>egress allowlist"]
+    D --> F["Scope credentials to<br/>what the user could do"]
+    D --> G["Taint tracking: tainted text<br/>may never choose a recipient"]
+    G --> H["Human confirms<br/>the concrete diff"]
+```
+
 **Follow-ups:** Which leg of the trifecta would you cut for a coding agent that reads GitHub issues? Why is an injection classifier a weak control rather than no control at all?
 
 </details>
@@ -1002,6 +1289,19 @@ What I do concretely:
 The conflict that actually bites is the **silent** one: 40 accumulated rules where rule 7 contradicts rule 31, nobody noticed, and the model picks non-deterministically. That shows up as ~5% inexplicable weirdness that no single fix explains. Audit for it, put contradiction cases in the eval, and note a model is quite good at finding contradictions in your own prompt if you ask it to.
 
 Also decide explicitly how long a user instruction persists. "Always answer in French" at turn 2 outliving the session surprises people.
+
+**Worth sketching.** The split at the top is the answer: one branch never reaches the model at all.
+
+```mermaid
+flowchart TD
+    A["Conflicting instruction"] --> B{"Is it authorisation<br/>or preference?"}
+    B -->|"authorisation"| C["Enforced in code<br/>at the tool boundary"]
+    C --> D["A leaked or overridden<br/>prompt changes nothing"]
+    B -->|"preference"| E["Instruction hierarchy:<br/>system, user, then content"]
+    E --> F["State precedence and the<br/>behaviour on conflict"]
+    F --> G["One worked conflict<br/>example in the prompt"]
+    E --> H["Retrieved content is<br/>never an instruction source"]
+```
 
 **Follow-ups:** How would you build eval cases for instruction conflicts? Why does instruction-hierarchy adherence degrade over a long conversation?
 
@@ -1046,6 +1346,20 @@ They work badly when the task requires shared, evolving state: writing a coheren
 **The cost.** Multi-agent burns dramatically more tokens than single-agent for the same task, plausibly close to an order of magnitude versus a plain chat interaction, since every sub-agent re-reads a system prompt and tool schemas. It buys latency through parallelism and quality through isolation. If your task is not parallel and not context-starved, you are paying that multiple for nothing.
 
 And tracing: unless you can see each agent's full context, multi-agent bugs are undebuggable.
+
+**Worth sketching.** The two lanes side by side make the rule land: fan-out is safe for reads and falls apart the moment the work shares evolving state.
+
+```mermaid
+flowchart TD
+    A["Orchestrator"] --> B["Self-contained brief 1"]
+    A --> C["Self-contained brief 2"]
+    B --> D["Sub-agent burns 40k tokens<br/>in its own window"]
+    C --> E["Sub-agent, own window"]
+    D --> F["Typed summary up,<br/>never the transcript"]
+    E --> F
+    F --> A
+    G["Write-heavy shared state"] --> H["Stay in one loop:<br/>context does not compose"]
+```
 
 **Follow-ups:** How would you detect that two sub-agents made conflicting implicit decisions? What would make you collapse a multi-agent system back into a single loop?
 

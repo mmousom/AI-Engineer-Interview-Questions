@@ -2,6 +2,8 @@
 
 Read this in one 60-90 minute pass the evening before an interview. It is not a substitute for the full topic material, it is what to have loaded in working memory. Each section links back to its deep dive.
 
+If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead of stopping to read the whole topic. It defines every acronym and concept in this repo in one line each, with a link to the page that treats it properly.
+
 ---
 
 ## 🧠 ML & Deep Learning Foundations

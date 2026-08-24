@@ -51,10 +51,10 @@ One theme per week; coding challenges spread throughout so implementation skills
 
 ### Week 4 - Design, safety, polish
 - Day 1: [09-safety-security-and-responsible-ai](09-safety-security-and-responsible-ai/) + [10-multimodal](10-multimodal/) crash courses.
-- Days 2-3: [11-ai-system-design](11-ai-system-design/) - framework, then 3 case studies as mock interviews: 45 minutes talking into a doc *before* reading the solution.
+- Days 2-3: [11-ai-system-design](11-ai-system-design/) - framework, then 3 case studies as [mock interviews](13-interview-process-and-behavioral/mock-interview-kit.md#round-3-ai-system-design-45-60-minutes): 45 minutes talking into a doc *before* reading the solution.
 - Day 4: [13-interview-process-and-behavioral](13-interview-process-and-behavioral/) - write your 5-7 STAR stories down.
 - Day 5: challenges 07 mini-GPT forward, 13 streaming parser (the hard ones).
-- Weekend: full mock loop - one coding challenge cold, one design prompt from the rapid-fire list, behavioural answers out loud. Then [CHEATSHEET.md](CHEATSHEET.md).
+- Weekend: full [mock loop](13-interview-process-and-behavioral/mock-interview-kit.md) - one coding challenge cold, one design prompt from the rapid-fire list, behavioural answers out loud. Hand the kit to a friend, or record yourself and score it a day later. Then [CHEATSHEET.md](CHEATSHEET.md).
 
 ---
 
@@ -71,8 +71,8 @@ Weeks 5-8:
 |------|-------|
 | 5 | Depth: re-do every **Advanced** section across topics 02, 04, 05, 06, 08. Read 5-6 foundational papers from [resources](resources/) (Attention, InstructGPT, LoRA, DPO, ReAct at minimum). |
 | 6 | Projects: polish one portfolio project to "shows evals + error analysis + tradeoff writeup" standard (see project ideas in [13-interview-process-and-behavioral](13-interview-process-and-behavioral/)). |
-| 7 | System design: all 8 case studies in [11-ai-system-design](11-ai-system-design/) as timed mocks. All 13 coding challenges done cold. |
-| 8 | Interview simulation: mock loops with a friend or by recording yourself; behavioural stories rehearsed; company-specific research; [CHEATSHEET.md](CHEATSHEET.md) passes. |
+| 7 | System design: all 8 case studies in [11-ai-system-design](11-ai-system-design/) as [timed mocks](13-interview-process-and-behavioral/mock-interview-kit.md#round-3-ai-system-design-45-60-minutes). All 13 coding challenges done cold. |
+| 8 | Interview simulation: [mock loops](13-interview-process-and-behavioral/mock-interview-kit.md) with a friend, or alone with the [self-mock protocol](13-interview-process-and-behavioral/mock-interview-kit.md#self-mock-protocol-no-partner); behavioural stories rehearsed; company-specific research; [CHEATSHEET.md](CHEATSHEET.md) passes. |
 
 ---
 

@@ -88,7 +88,7 @@ sequenceDiagram
     S-->>P: first tokens (~100ms TTFT)
     P->>E: ghost-text suggestion
     E->>P: Tab (accept) → telemetry event
-    Note over P,S: majority of requests are cancelled;<br/>cheap cancellation is a hard serving requirement
+    Note over P,S: majority of requests are cancelled,<br/>cheap cancellation is a hard serving requirement
 ```
 
 ## Component deep-dives

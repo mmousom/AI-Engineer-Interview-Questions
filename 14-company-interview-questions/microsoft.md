@@ -248,6 +248,58 @@ Anti-patterns: a "failure" that's secretly a win, blaming externals, lessons wit
 
 </details>
 
+### 11. A shipped Copilot feature that summarises job applicants for recruiters is accused of working worse for some groups of candidates. How do you establish whether that's true, and what do you do about it?
+
+<details><summary><b>Answer</b></summary>
+
+First classify the harm, because the response differs by type. Microsoft's published Responsible AI Standard splits fairness into three goals: quality-of-service gaps, allocation of resources and opportunities, and stereotyping/demeaning/erasing outputs. A hiring feature sits in the allocation bucket, which names employment explicitly and is the highest-stakes one, so it pulls in an impact assessment and a documented human-oversight story, not just a metrics dashboard.
+
+Then measure. The hard part is that you rarely have demographic labels: tenant content is off-limits and self-reported attributes are sparse. Two routes that work:
+
+1. **Counterfactual perturbation.** Build paired inputs that differ only in a protected proxy - the same CV with swapped names, pronouns, university, or career-gap wording. Any output delta is attributable to the swap by construction, so you need no labels at all. Measure the delta in tone, in the rate of unsupported negative claims, and in which evidence gets cited.
+2. **Disaggregated evaluation** on consented or synthetic data that does carry group labels: report metrics per group rather than in aggregate (Fairlearn, Microsoft's own open-source toolkit, exists for exactly this), with confidence intervals. Aggregate accuracy hides everything, and a small group with a wide interval is a "collect more data" signal, not a finding.
+
+Mitigations, cheapest first: mask demographic proxies before the model sees them (names, addresses, graduation years, school); constrain the output from free-form judgement to extraction with citations, which removes most of the room for the model to add unsupported judgement; add a post-hoc classifier for demeaning language; touch the model only if those layers fail.
+
+The senior move is product scoping. For an allocation-affecting feature, don't emit a ranking or a recommendation at all: summarise with citations, keep a human as the decision-maker, publish a transparency note stating the limitations, and gate every release on the counterfactual suite in CI.
+
+**Follow-ups:** Your counterfactual suite shows a small but consistent tone delta on name swaps. Is that ship-blocking, and who decides? How do you monitor for fairness regressions in production without inspecting customer content?
+
+</details>
+
+### 12. Low-level design: sketch the classes and interfaces for the tool-calling layer of an agent host, where tools can come from native code, an OpenAPI spec, or an MCP server.
+
+<details><summary><b>Answer</b></summary>
+
+Start from the seam. A tool is four things: a name, a description the model reads, a parameter schema, and something to invoke. Everything else is policy layered on top.
+
+Core types:
+
+- `ToolDefinition` - immutable value object holding name, description, JSON Schema for parameters, optional result schema. Immutable because it is shared across threads and serialised into every prompt.
+- `ITool` - `ToolDefinition Definition { get; }` plus `Task<ToolResult> InvokeAsync(ToolCall call, ToolContext ctx, CancellationToken ct)`. Deliberately narrow: one property, one method.
+- `ToolResult` - a success/error union rather than thrown exceptions. The error text is fed back to the model for a corrective retry, so it has to be structured and safe to show: no stack traces, no connection strings.
+- `ToolContext` - caller identity, tenant, correlation id, remaining budget and deadline. Passing identity explicitly instead of reading ambient state is what makes "the tool runs as the user, never as the service" testable.
+- `IToolProvider` - discovery plus a factory for handlers. One adapter per source: reflection over annotated methods, an OpenAPI parser, an MCP client. A new integration is a new provider, and the orchestration loop never changes.
+- `ToolRegistry` - resolves names, namespaces them by provider so two sources can both ship a `search`, and hands each session a filtered view, meaning the allowlist for that agent rather than the global set.
+
+Cross-cutting concerns go in decorators over `ITool`, not in a base class: timeout, retry, rate limit, audit log, and a `RequiresApproval` wrapper that returns a pending result for the host to surface to the user. Decorators compose in a declared order and each is unit-testable against a fake inner tool. The invoker validates arguments against the schema before dispatch, so a hallucinated parameter fails cheaply instead of halfway through a side effect.
+
+**Worth sketching.** How one narrow interface plus decorators lets three unrelated tool sources share a single execution path.
+
+```mermaid
+flowchart LR
+    A["Providers: native,<br/>OpenAPI, MCP"] --> B["ToolRegistry<br/>(namespaced)"]
+    B --> C["Per-session allowlist"]
+    C --> D["Decorators: timeout,<br/>retry, audit, approval"]
+    D --> E["ITool.InvokeAsync"]
+    E --> F["ToolResult<br/>(success or error)"]
+    F -->|"error fed back"| G["Agent loop"]
+```
+
+**Follow-ups:** Two providers register a tool called `search`. How does the registry resolve that, and what name does the model actually see? Where does per-user permission enforcement belong: the tool, a decorator, or the downstream service?
+
+</details>
+
 ## How to prepare
 
 Repo topics, in priority order for Microsoft specifically:
@@ -281,4 +333,7 @@ Compensation: no numbers here - see [levels.fyi](https://www.levels.fyi/companie
 - [Interview Query - Microsoft AI Engineer interview guide](https://www.interviewquery.com/prep-guides/microsoft-ai-engineer) - AI-engineer-specific round descriptions (consulted via search results)
 - [Blind - Microsoft interview discussions](https://www.teamblind.com/company/Microsoft/posts/microsoft-interview) - candidate reports incl. CoreAI loops (DSA/LLD/HLD/"AI fluency" rounds); anecdotal, varies
 - [Azure AI Foundry product page](https://azure.microsoft.com/en-us/products/ai-foundry/) - platform scope referenced for role/skill expectations
+- [Microsoft Responsible AI Standard, v2 - General Requirements (official PDF)](https://cdn-dynmedia-1.microsoft.com/is/content/microsoftcorp/microsoft/final/en-us/microsoft-brand/documents/Microsoft-Responsible-AI-Standard-General-Requirements.pdf) - the six principles and the three fairness goals (quality of service, allocation, stereotyping/demeaning/erasing)
+- [Fairlearn](https://fairlearn.org/) - Microsoft-originated open-source toolkit for disaggregated fairness assessment
+- [Observability in generative AI - Microsoft Learn](https://learn.microsoft.com/en-us/azure/foundry/concepts/observability) - built-in quality, safety, and agent evaluators shipped with the Foundry evaluation SDK
 - [levels.fyi - Microsoft](https://www.levels.fyi/companies/microsoft) - compensation data
