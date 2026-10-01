@@ -20,6 +20,11 @@
     <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat" alt="PRs Welcome" />
   </a>
 
+  <p>
+  <a href="https://enginebogie.com/u/om"><img src="https://img.shields.io/badge/Mock_interview-Book_a_session-orange?style=for-the-badge" alt="Book a mock interview" /></a>
+  <a href="https://topmate.io/ombharatiya"><img src="https://img.shields.io/badge/1:1_mentorship-Topmate-blue?style=for-the-badge" alt="1:1 mentorship on Topmate" /></a>
+  </p>
+
   <p><strong>Company interview questions:</strong><br/>
   <a href="14-company-interview-questions/anthropic.md">Anthropic</a> ·
   <a href="14-company-interview-questions/openai.md">OpenAI</a> ·
@@ -82,8 +87,20 @@ If you can clear all 75, you are ready for most AI engineering loops. If you can
 | 1-2 months+ | The [8-week plan](STUDY_PLAN.md): all 541 topic questions, all 10 case studies, all 19 challenges, plus a portfolio project | Everything, plus building |
 | Targeting a company | Add that company's interview questions from the banner above | +10-12 tailored questions and the loop map |
 | Not an "AI Engineer" title | Start from your [role guide](#role-guides) instead | Role-calibrated study map |
+| Loop booked, want real feedback | Do one [mock interview](https://enginebogie.com/u/om) with an experienced interviewer before the real thing | Honest scoring on where you lose points |
 
 **Essential shortcuts:** [The AI Engineer 75](AI-ENGINEER-75.md) · [Glossary](GLOSSARY.md) · [Mock interview kit](13-interview-process-and-behavioral/mock-interview-kit.md) · [Night-before cheat sheet](CHEATSHEET.md) · [Study plans](STUDY_PLAN.md) · [Curated papers and courses](resources/README.md) · [aidaddy.tech](https://aidaddy.tech), the companion site for AI system design and interview prep
+
+## 🧑‍🏫 Practise with a real interviewer
+
+Self-study gets you most of the way. What it cannot give you is someone across the table pushing back on your answers, watching the clock, and telling you exactly where you lost the room. If you want that before the real loop, book a mock interview, a prep consultation, or ongoing mentorship:
+
+| Option | Book here |
+|---|---|
+| Mock interviews and mentorship for AI engineering roles | [enginebogie.com/u/om](https://enginebogie.com/u/om) |
+| 1:1 consultations and interview prep sessions | [topmate.io/ombharatiya](https://topmate.io/ombharatiya) |
+
+Prefer to practise for free first? The [mock interview kit](13-interview-process-and-behavioral/mock-interview-kit.md) has interviewer scripts and scoring rubrics you can hand to a friend.
 
 ---
 
@@ -225,6 +242,8 @@ New questions, company coverage, and study material land here regularly. Watchin
 <a href="https://github.com/ombharatiya/AI-Engineer-Interview-Questions">
   <img src="https://img.shields.io/badge/⭐ Star-Show Support-yellow?style=for-the-badge" alt="Star Repo" />
 </a>
+
+**Want a mock interview or 1:1 prep?** Book a session on [enginebogie.com/u/om](https://enginebogie.com/u/om) or [topmate.io/ombharatiya](https://topmate.io/ombharatiya).
 
 **Follow [@ombharatiya](https://github.com/ombharatiya)** for interview tips and updates, and see [aidaddy.tech](https://aidaddy.tech) for the companion AI system design and interview prep site:
 
