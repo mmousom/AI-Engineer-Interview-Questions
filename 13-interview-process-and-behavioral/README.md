@@ -124,7 +124,7 @@ Reading answers is not the same as giving them under pressure. Before a real loo
 
 ## Interview questions
 
-22 behavioural and experience questions specific to AI work, with answer guidance, in [questions.md](questions.md).
+42 behavioural and experience questions specific to AI work, with answer guidance, in [questions.md](questions.md).
 
 ## Red flags interviewers watch for
 
